@@ -1,7 +1,7 @@
 {
     "domain": "Home-Assistant-Unifi-Connect-Display",
     "name": "UniFi Display Control",
-    "version": "v1.0.0",
+    "version": "v1.0.1",
     "documentation": "https://github.com/benepixx/Home-Assistant-Unifi-Connect-Display",
     "dependencies": [],
     "requirements": [],
