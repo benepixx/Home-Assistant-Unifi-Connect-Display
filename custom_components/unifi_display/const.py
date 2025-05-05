@@ -1,4 +1,3 @@
-
 DOMAIN = "unifi_display"
 NAME = "UniFi Display"
 MANUFACTURER = "Ubiquiti"
