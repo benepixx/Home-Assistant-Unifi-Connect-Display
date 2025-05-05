@@ -1,31 +1,51 @@
-import logging
 from homeassistant import config_entries
-from homeassistant.core import HomeAssistant
 from homeassistant.const import CONF_HOST, CONF_USERNAME, CONF_PASSWORD
 from .const import DOMAIN
-
-_LOGGER = logging.getLogger(__name__)
+import aiohttp
+import asyncio
 
 class UniFiDisplayConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for UniFi Display."""
+    
+    VERSION = 1
 
     async def async_step_user(self, user_input=None):
-        """Handle the initial step."""
-        if user_input is not None:
-            # Here you will validate the user_input (host, username, password, etc.)
-            # For now we will just store the values
-            return self.async_create_entry(
-                title=user_input[CONF_HOST], 
-                data=user_input
+        """Handle the initial step of the config flow."""
+        if user_input is None:
+            return self.async_show_form(
+                step_id="user",
+                data_schema=self._get_data_schema(),
             )
 
-        return self.async_show_form(
-            step_id="user",
-            data_schema=self._get_data_schema(),
+        # Collect user input
+        host = user_input[CONF_HOST]
+        username = user_input[CONF_USERNAME]
+        password = user_input[CONF_PASSWORD]
+
+        # Perform API check (this can be modified based on your API call)
+        try:
+            async with aiohttp.ClientSession() as session:
+                # Replace this with your actual API request
+                response = await session.get(f"http://{host}/api/v2/status")
+                data = await response.json()
+                if response.status != 200:
+                    raise ValueError("Unable to connect to UniFi Display")
+
+        except Exception as e:
+            return self.async_show_form(
+                step_id="user",
+                data_schema=self._get_data_schema(),
+                errors={"base": str(e)},
+            )
+
+        # If no errors, continue with config entry
+        return self.async_create_entry(
+            title=f"UniFi Display {host}",
+            data={CONF_HOST: host, CONF_USERNAME: username, CONF_PASSWORD: password},
         )
 
     def _get_data_schema(self):
-        """Return the data schema for the user input."""
+        """Return the schema for user input."""
         return vol.Schema({
             vol.Required(CONF_HOST): str,
             vol.Required(CONF_USERNAME): str,
