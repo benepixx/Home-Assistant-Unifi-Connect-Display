@@ -1,3 +1,6 @@
+#THIS INTEGRATION DOES NOT WORK YET!!!
+
+
 # UniFi Display Integration for Home Assistant
 
 This integration allows you to control your UniFi Display from Home Assistant.
