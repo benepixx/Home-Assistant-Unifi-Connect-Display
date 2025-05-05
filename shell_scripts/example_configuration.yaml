@@ -1,0 +1,9 @@
+Add the following to configuration.yaml, making sure you make them executable from terminal and match the names to your script names. 
+
+
+shell_command:
+  unifi_display_off: '/bin/bash /config/scripts/unifi_display_off.sh'
+  unifi_display_on: '/bin/bash /config/scripts/unifi_display_on.sh'
+  unifi_display_google: '/bin/bash /config/scripts/unifi_url_google.sh'
+  unifi_display_fusion: '/bin/bash /config/scripts/unifi_url_fusion.sh'
+  unifi_display_doorbell: '/bin/bash /config/scripts/unifi_url_doorbell.sh'
