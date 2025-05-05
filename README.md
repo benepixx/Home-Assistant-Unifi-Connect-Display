@@ -1,4 +1,5 @@
-#THIS INTEGRATION DOES NOT WORK YET!!!
+# THIS INTEGRATION DOES NOT WORK YET
+# Please see attached shell scripts for the workaround until i get the full thing integration up and running. You can add these as .sh files in your config and reference them in configuration.yaml, just update the console IP, Username and Password and you should be good to go.
 
 
 # UniFi Display Integration for Home Assistant
