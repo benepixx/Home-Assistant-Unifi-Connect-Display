@@ -1,9 +1,0 @@
-{
-  "domain": "unifi_display",
-  "name": "UniFi Display",
-  "version": "1.0",
-  "documentation": "https://github.com/benepixx/unifi_display",
-  "dependencies": [],
-  "codeowners": ["@benepixx"],
-  "requirements": []
-}
