@@ -10,7 +10,7 @@ CONF_PASSWORD = "password"
 
 API_BASE = "/proxy/connect/api/v2"
 DEVICE_ENDPOINT = f"{API_BASE}/devices"
-STATUS_ENDPOINT = f"{API_BASE}/devices/{{device_id}}/status"  # Corrected line
+STATUS_ENDPOINT = f"{API_BASE}/devices/{{device_id}}/status"  # Use placeholders for device_id
 
 SUPPORTED_ACTIONS = [
     "enable_auto_reload",
