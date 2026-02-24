@@ -1,12 +1,11 @@
 {
-    "domain": "Home-Assistant-Unifi-Connect-Display",
-    "name": "UniFi Display Control",
-    "version": "v1.0.3",
+    "domain": "unifi_display",
+    "name": "UniFi Connect Display",
+    "version": "2.0.0",
     "documentation": "https://github.com/benepixx/Home-Assistant-Unifi-Connect-Display",
     "dependencies": [],
     "requirements": [],
     "codeowners": ["@benepixx"],
-    "iot_class": "local_push",
-    "config_flow": true,
-    "dhcp": false
+    "iot_class": "local_polling",
+    "config_flow": true
 }
