@@ -1,29 +1,60 @@
-from homeassistant.components.button import ButtonEntity
+"""Button platform for UniFi Connect Display."""
+from __future__ import annotations
 
-async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
-    """Set up the UniFi Display buttons.""" 
-    buttons = []
-    for action in BUTTON_ACTIONS:
-        buttons.append(UniFiDisplayButton(action))
-    async_add_entities(buttons)
+import logging
+
+from homeassistant.components.button import ButtonEntity
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+
+from .api import UniFiDisplayAPI
+from .const import BUTTON_ACTIONS, CONF_DEVICE_ID, DOMAIN, MANUFACTURER, NAME
+
+_LOGGER = logging.getLogger(__name__)
+
+
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up UniFi Connect Display button entities from a config entry."""
+    api: UniFiDisplayAPI = hass.data[DOMAIN][entry.entry_id]["api"]
+    device_id: str = entry.data[CONF_DEVICE_ID]
+
+    async_add_entities(
+        UniFiDisplayButton(api, entry, device_id, action)
+        for action in BUTTON_ACTIONS
+    )
+
 
 class UniFiDisplayButton(ButtonEntity):
-    """Representation of a UniFi Display Button."""
+    """A button that triggers a single action on the display."""
 
-    def __init__(self, action):
+    def __init__(
+        self,
+        api: UniFiDisplayAPI,
+        entry: ConfigEntry,
+        device_id: str,
+        action: str,
+    ) -> None:
+        """Initialise the button."""
+        self._api = api
         self._action = action
+        friendly = action.replace("_", " ").title()
+        self._attr_name = f"{NAME} {friendly}"
+        self._attr_unique_id = f"{device_id}_{action}"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, device_id)},
+            name=entry.title,
+            manufacturer=MANUFACTURER,
+        )
 
-    @property
-    def name(self):
-        """Return the name of the button."""
-        return f"UniFi Display {self._action}"
+    async def async_press(self) -> None:
+        """Send the action to the display when the button is pressed."""
+        success = await self._api.send_action(self._action)
+        if not success:
+            _LOGGER.error("Failed to send action '%s' to display", self._action)
 
-    async def async_press(self):
-        """Handle the button press.""" 
-        # Call API to perform the action on the display
-        await self._perform_action()
-
-    async def _perform_action(self):
-        """Perform the action using the API.""" 
-        # Placeholder function to execute the action
-        pass

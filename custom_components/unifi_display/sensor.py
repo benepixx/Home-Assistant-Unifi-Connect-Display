@@ -1,43 +1,66 @@
-from homeassistant.helpers.entity import Entity
-from .const import SENSOR_TYPES
+"""Sensor platform for UniFi Connect Display."""
+from __future__ import annotations
 
-async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
-    """Set up the UniFi Display sensors.""" 
-    sensors = []
-    for sensor_type, (name, unit) in SENSOR_TYPES.items():
-        sensors.append(UniFiDisplaySensor(sensor_type, name, unit))
-    async_add_entities(sensors)
+import logging
+from typing import Any
 
-class UniFiDisplaySensor(Entity):
-    """Representation of a UniFi Display Sensor."""
+from homeassistant.components.sensor import SensorEntity
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.update_coordinator import (
+    CoordinatorEntity,
+    DataUpdateCoordinator,
+)
 
-    def __init__(self, sensor_type, name, unit):
-        self._sensor_type = sensor_type
-        self._name = name
-        self._unit = unit
-        self._state = None
+from .const import CONF_DEVICE_ID, DOMAIN, MANUFACTURER, NAME, SENSOR_TYPES
+
+_LOGGER = logging.getLogger(__name__)
+
+
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up UniFi Connect Display sensor entities from a config entry."""
+    coordinator: DataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    device_id: str = entry.data[CONF_DEVICE_ID]
+
+    async_add_entities(
+        UniFiDisplaySensor(coordinator, entry, device_id, sensor_key)
+        for sensor_key in SENSOR_TYPES
+    )
+
+
+class UniFiDisplaySensor(CoordinatorEntity, SensorEntity):
+    """A sensor that reports a single status field from the display."""
+
+    def __init__(
+        self,
+        coordinator: DataUpdateCoordinator,
+        entry: ConfigEntry,
+        device_id: str,
+        sensor_key: str,
+    ) -> None:
+        """Initialise the sensor."""
+        super().__init__(coordinator)
+        friendly_name, unit = SENSOR_TYPES[sensor_key]
+        self._sensor_key = sensor_key
+        self._attr_name = f"{NAME} {friendly_name}"
+        self._attr_unique_id = f"{device_id}_{sensor_key}"
+        self._attr_native_unit_of_measurement = unit
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, device_id)},
+            name=entry.title,
+            manufacturer=MANUFACTURER,
+        )
 
     @property
-    def name(self):
-        """Return the name of the sensor."""
-        return self._name
+    def native_value(self) -> Any:
+        """Return the sensor value from coordinator data."""
+        if self.coordinator.data is None:
+            return None
+        return self.coordinator.data.get(self._sensor_key)
 
-    @property
-    def state(self):
-        """Return the state of the sensor."""
-        return self._state
-
-    @property
-    def unit_of_measurement(self):
-        """Return the unit of measurement."""
-        return self._unit
-
-    async def async_update(self):
-        """Fetch new state data from the API."""
-        # Call API and update the state with data from the device
-        self._state = await self._fetch_state()
-
-    async def _fetch_state(self):
-        """Fetch the state of the sensor from the UniFi Display API."""
-        # This would be replaced by the actual API call to get data
-        return "Example Data"

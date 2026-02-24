@@ -1,20 +1,21 @@
 unifi_display_launch_app:
-  description: "Launch an app on the UniFi Display"
+  description: "Launch an app on the UniFi Connect Display"
   fields:
     app_id:
-      description: "The app to launch"
-      example: "com.unifi.signage"
+      description: "Package name of the app to launch"
+      example: "com.ubnt.connect.signage"
 
 unifi_display_load_website:
-  description: "Load a website on the UniFi Display"
+  description: "Load a website URL on the UniFi Connect Display"
   fields:
     url:
-      description: "The URL to load"
+      description: "The full URL to display (include http:// or https://)"
       example: "https://example.com"
 
 unifi_display_load_youtube:
-  description: "Load a YouTube video on the UniFi Display"
+  description: "Load a YouTube video on the UniFi Connect Display"
   fields:
     video_id:
-      description: "The YouTube video ID"
+      description: "The YouTube video ID (the part after ?v= in the URL)"
       example: "dQw4w9WgXcQ"
+

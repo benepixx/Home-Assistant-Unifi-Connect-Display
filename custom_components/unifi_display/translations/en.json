@@ -1,0 +1,32 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "UniFi Connect Display",
+        "description": "Enter your UniFi controller credentials. The host should be the IP address or hostname of the controller (e.g. 192.168.1.1).",
+        "data": {
+          "host": "Host",
+          "username": "Username",
+          "password": "Password",
+          "verify_ssl": "Verify SSL certificate"
+        }
+      },
+      "device": {
+        "title": "Select Display",
+        "description": "Multiple displays were found. Select the display you want to control.",
+        "data": {
+          "device_id": "Display"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect. Check the host address and try again.",
+      "invalid_auth": "Invalid username or password.",
+      "no_devices": "No UniFi Connect displays found on this controller.",
+      "unknown": "An unexpected error occurred."
+    },
+    "abort": {
+      "already_configured": "This display is already configured."
+    }
+  }
+}
