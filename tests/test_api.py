@@ -618,6 +618,38 @@ class TestSendAction:
 
         assert "display_on" not in api._unsupported_actions
 
+    @pytest.mark.asyncio
+    async def test_uses_action_id_from_nested_type_map(self, api):
+        """send_action uses UUID populated from device['type']['supportedActions']."""
+        known_uuid = "06ad25d0-b087-46de-8e9b-7b18339e7238"
+        captured_body = {}
+
+        resp = MagicMock()
+        resp.status = 200
+        resp.__aenter__ = AsyncMock(return_value=resp)
+        resp.__aexit__ = AsyncMock(return_value=False)
+
+        session = MagicMock()
+        session.closed = False
+
+        def fake_patch(url, json=None, headers=None):
+            captured_body.update(json or {})
+            return resp
+
+        session.patch = fake_patch
+
+        # Simulate get_devices populating the map from nested type.supportedActions.
+        async def fake_get_devices():
+            api._action_id_map["display_on"] = known_uuid
+            return []
+
+        with patch.object(api, "_get_session", AsyncMock(return_value=session)):
+            with patch.object(api, "get_devices", AsyncMock(side_effect=fake_get_devices)):
+                await api.send_action("display_on")
+
+        assert captured_body["id"] == known_uuid
+        assert captured_body["name"] == "display_on"
+
 
 # ---------------------------------------------------------------------------
 # get_devices
@@ -848,6 +880,50 @@ class TestActionIdMap:
     def test_update_from_device_handles_non_list_supported_actions(self, api):
         api._update_action_id_map_from_device({"supportedActions": "not-a-list"})
         assert api._action_id_map == {}
+
+    def test_update_from_device_nested_under_type(self, api):
+        """supportedActions nested under device['type'] is supported (firmware >= 1.13.6)."""
+        device = {
+            "id": "dev-id",
+            "type": {
+                "supportedActions": [
+                    {"id": "06ad25d0-b087-46de-8e9b-7b18339e7238", "name": "display_on"},
+                    {"id": "ea959362-c56f-4932-ab8b-0f512a93460c", "name": "display_off"},
+                ],
+            },
+        }
+        api._update_action_id_map_from_device(device)
+        assert api._action_id_map["display_on"] == "06ad25d0-b087-46de-8e9b-7b18339e7238"
+        assert api._action_id_map["display_off"] == "ea959362-c56f-4932-ab8b-0f512a93460c"
+
+    def test_update_from_device_top_level_takes_priority_over_type(self, api):
+        """Top-level supportedActions takes priority over device['type']['supportedActions']."""
+        device = {
+            "id": "dev-id",
+            "supportedActions": [{"id": "top-uuid", "name": "display_on"}],
+            "type": {
+                "supportedActions": [{"id": "nested-uuid", "name": "display_on"}],
+            },
+        }
+        api._update_action_id_map_from_device(device)
+        assert api._action_id_map["display_on"] == "top-uuid"
+
+    def test_update_action_id_map_nested_type_supported_actions(self, api):
+        """_update_action_id_map finds matching device with nested type.supportedActions."""
+        devices = [
+            {
+                "id": "dev-id",
+                "type": {
+                    "supportedActions": [
+                        {"id": "06ad25d0-b087-46de-8e9b-7b18339e7238", "name": "display_on"},
+                        {"id": "ea959362-c56f-4932-ab8b-0f512a93460c", "name": "display_off"},
+                    ],
+                },
+            },
+        ]
+        api._update_action_id_map(devices)
+        assert api._action_id_map["display_on"] == "06ad25d0-b087-46de-8e9b-7b18339e7238"
+        assert api._action_id_map["display_off"] == "ea959362-c56f-4932-ab8b-0f512a93460c"
 
     def test_update_action_id_map_finds_matching_device(self, api):
         devices = [
