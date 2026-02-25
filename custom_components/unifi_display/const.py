@@ -13,6 +13,7 @@ CONF_VERIFY_SSL = "verify_ssl"
 # API paths (host prefix is added at runtime)
 API_LOGIN_PATH = "/api/auth/login"
 API_DEVICES_PATH = "/proxy/connect/api/v2/devices?shadow=true"
+API_DEVICE_PATH = "/proxy/connect/api/v2/devices/{device_id}"
 API_DEVICE_STATUS_PATH = "/proxy/connect/api/v2/devices/{device_id}/status"
 
 # Default polling interval (seconds)
