@@ -67,8 +67,6 @@ SENSOR_TYPES = {
 
 # Button actions (single-press, no toggle)
 BUTTON_ACTIONS = [
-    "display_on",
-    "display_off",
     "reboot",
     "start_locating",
     "stop_locating",
