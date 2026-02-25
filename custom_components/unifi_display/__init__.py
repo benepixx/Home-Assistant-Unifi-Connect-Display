@@ -38,9 +38,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         verify_ssl=entry.data.get(CONF_VERIFY_SSL, False),
     )
 
-    # Verify connectivity at startup.
+    # Verify connectivity at startup and populate the supported-action UUID map.
     try:
         await api.authenticate()
+        await api.get_devices()
     except CannotConnectError as exc:
         await api.close()
         raise ConfigEntryNotReady(f"Cannot connect to UniFi controller: {exc}") from exc
