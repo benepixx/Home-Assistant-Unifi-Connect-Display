@@ -38,7 +38,7 @@ The integration authenticates with the **UniFi Network controller** using the sa
 3. Include the session cookie **and** `X-CSRF-Token` header in subsequent requests.
 4. Send display actions as `PATCH /proxy/connect/api/v2/devices/{device_id}/status` with a JSON body: `{"id": "<uuid>", "name": "<action>", "args": {...}}`.
 
-No cloud dependency, no HACS required.
+
 
 ---
 
