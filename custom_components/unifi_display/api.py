@@ -75,6 +75,7 @@ class UniFiDisplayAPI:
 
         self._session: Optional[aiohttp.ClientSession] = None
         self._csrf_token: Optional[str] = None
+        self._token: Optional[str] = None
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -120,6 +121,8 @@ class UniFiDisplayAPI:
         headers: dict[str, str] = {"Origin": self._host}
         if self._csrf_token:
             headers["X-CSRF-Token"] = self._csrf_token
+        if self._token:
+            headers["Authorization"] = f"Bearer {self._token}"
         return headers
 
     # ------------------------------------------------------------------
@@ -134,6 +137,10 @@ class UniFiDisplayAPI:
                 did not contain the expected user data.
             CannotConnectError: The controller could not be reached.
         """
+        # Reset stored auth state before a fresh login attempt.
+        self._csrf_token = None
+        self._token = None
+
         session = await self._get_session()
         url = f"{self._host}{API_LOGIN_PATH}"
         _LOGGER.debug("Authenticating against URL: %s", url)
@@ -141,10 +148,17 @@ class UniFiDisplayAPI:
 
         try:
             async with session.post(url, json=payload) as resp:
+                _LOGGER.debug(
+                    "Login response: HTTP %s, headers=%s",
+                    resp.status,
+                    dict(resp.headers),
+                )
                 try:
                     body = await resp.json(content_type=None)
                 except Exception:
                     body = {}
+
+                _LOGGER.debug("Login response body: %s", body)
 
                 if resp.status != 200:
                     raise AuthenticationError(
@@ -163,14 +177,21 @@ class UniFiDisplayAPI:
 
         # Extract CSRF token from the TOKEN cookie (JWT).
         cookies = session.cookie_jar.filter_cookies(url)
+        _LOGGER.debug(
+            "Cookies after login: %s",
+            {k: v.value for k, v in cookies.items()},
+        )
         token_cookie = cookies.get("TOKEN")
         if token_cookie:
+            self._token = token_cookie.value
             self._csrf_token = self._extract_csrf_from_jwt(token_cookie.value)
             if not self._csrf_token:
                 _LOGGER.warning(
                     "Logged in successfully but could not extract CSRF token "
                     "from TOKEN cookie; some requests may fail."
                 )
+            else:
+                _LOGGER.debug("CSRF token extracted successfully.")
         else:
             _LOGGER.warning(
                 "TOKEN cookie not found after login; "
@@ -282,12 +303,18 @@ class UniFiDisplayAPI:
             "X-CSRF-Token": self._csrf_token or "",
             "Origin": self._host,
         }
+        if self._token:
+            headers["Authorization"] = f"Bearer {self._token}"
 
         try:
             async with session.patch(url, json=body, headers=headers) as resp:
                 if resp.status == 401:
                     await self.authenticate()
                     headers["X-CSRF-Token"] = self._csrf_token or ""
+                    if self._token:
+                        headers["Authorization"] = f"Bearer {self._token}"
+                    else:
+                        headers.pop("Authorization", None)
                     async with session.patch(
                         url, json=body, headers=headers
                     ) as retry:
