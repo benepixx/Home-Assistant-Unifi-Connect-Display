@@ -29,6 +29,28 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
+def _parse_devices_response(data: Any) -> list[dict[str, Any]]:
+    """Parse a devices API response into a list of device dicts.
+
+    Handles both a bare list and a wrapper object with a ``data`` key,
+    e.g. ``{"err": null, "type": "collection", "data": [...], ...}``.
+    """
+    if isinstance(data, list):
+        _LOGGER.debug("Devices response: bare list with %d item(s)", len(data))
+        return data
+    if isinstance(data, dict) and isinstance(data.get("data"), list):
+        devices = data["data"]
+        _LOGGER.debug(
+            "Devices response: wrapper object with %d item(s)", len(devices)
+        )
+        return devices
+    _LOGGER.debug(
+        "Devices response: unexpected format %s; returning empty list",
+        type(data).__name__,
+    )
+    return []
+
+
 class AuthenticationError(Exception):
     """Raised when authentication with the UniFi controller fails."""
 
@@ -291,9 +313,9 @@ class UniFiDisplayAPI:
                         url, headers=self._auth_headers()
                     ) as retry:
                         data = await retry.json(content_type=None)
-                        return data if isinstance(data, list) else []
+                        return _parse_devices_response(data)
                 data = await resp.json(content_type=None)
-                return data if isinstance(data, list) else []
+                return _parse_devices_response(data)
         except aiohttp.ClientError as exc:
             raise CannotConnectError(str(exc)) from exc
 

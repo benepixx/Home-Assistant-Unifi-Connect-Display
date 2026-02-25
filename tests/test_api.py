@@ -12,6 +12,7 @@ from custom_components.unifi_display.api import (
     AuthenticationError,
     CannotConnectError,
     UniFiDisplayAPI,
+    _parse_devices_response,
 )
 
 
@@ -384,6 +385,46 @@ class TestGetDevices:
         with patch.object(api, "_get_session", AsyncMock(return_value=session)):
             result = await api.get_devices()
         assert result == []
+
+    @pytest.mark.asyncio
+    async def test_returns_device_list_from_wrapper_response(self, api):
+        devices = [{"id": "d1", "name": "Living Room Display"}]
+        wrapper = {"err": None, "type": "collection", "data": devices, "offset": 0, "limit": 0}
+        resp = _mock_response(status=200, json_data=wrapper)
+        session = MagicMock()
+        session.closed = False
+        session.get = MagicMock(return_value=resp)
+        with patch.object(api, "_get_session", AsyncMock(return_value=session)):
+            result = await api.get_devices()
+        assert result == devices
+
+
+# ---------------------------------------------------------------------------
+# _parse_devices_response
+# ---------------------------------------------------------------------------
+
+class TestParseDevicesResponse:
+    def test_bare_list(self):
+        devices = [{"id": "d1"}]
+        assert _parse_devices_response(devices) == devices
+
+    def test_wrapper_dict(self):
+        devices = [{"id": "d1"}, {"id": "d2"}]
+        wrapper = {"err": None, "type": "collection", "data": devices, "offset": 0, "limit": 0}
+        assert _parse_devices_response(wrapper) == devices
+
+    def test_empty_wrapper_data(self):
+        wrapper = {"err": None, "type": "collection", "data": [], "offset": 0, "limit": 0}
+        assert _parse_devices_response(wrapper) == []
+
+    def test_unexpected_dict_returns_empty(self):
+        assert _parse_devices_response({"error": "oops"}) == []
+
+    def test_none_returns_empty(self):
+        assert _parse_devices_response(None) == []
+
+    def test_string_returns_empty(self):
+        assert _parse_devices_response("unexpected") == []
 
 
 # ---------------------------------------------------------------------------
