@@ -16,6 +16,7 @@ import json
 import logging
 import uuid
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 import aiohttp
 
@@ -63,6 +64,9 @@ class UniFiDisplayAPI:
         host = host.rstrip("/")
         if not host.startswith(("http://", "https://")):
             host = f"https://{host}"
+        parsed = urlparse(host)
+        if not parsed.scheme or not parsed.netloc:
+            raise ValueError(f"Invalid host URL after normalisation: {host!r}")
         self._host = host
         self._username = username
         self._password = password
@@ -132,6 +136,7 @@ class UniFiDisplayAPI:
         """
         session = await self._get_session()
         url = f"{self._host}{API_LOGIN_PATH}"
+        _LOGGER.debug("Authenticating against URL: %s", url)
         payload = {"username": self._username, "password": self._password}
 
         try:
