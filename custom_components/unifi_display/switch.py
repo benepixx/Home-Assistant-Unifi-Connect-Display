@@ -121,6 +121,14 @@ class UniFiDisplaySwitch(SwitchEntity):
         """Return the current state of the switch."""
         return self._attr_is_on
 
+    @property
+    def available(self) -> bool:
+        """Return False when the controller has flagged either action as unsupported."""
+        return (
+            self._api.is_action_supported(self._on_action)
+            and self._api.is_action_supported(self._off_action)
+        )
+
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Send the 'enable' action to the display."""
         success = await self._api.send_action(self._on_action)

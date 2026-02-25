@@ -93,3 +93,8 @@ class UniFiDisplayNumber(CoordinatorEntity, NumberEntity):
                 "Failed to set %s to %s on display", self._action, level
             )
 
+    @property
+    def available(self) -> bool:
+        """Return False when the controller has flagged this action as unsupported."""
+        return self._api.is_action_supported(self._action)
+

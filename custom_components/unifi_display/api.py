@@ -106,6 +106,9 @@ class UniFiDisplayAPI:
         # Maps supported action name → supported action UUID for this device.
         # Populated from ``supportedActions`` in device API responses.
         self._action_id_map: dict[str, str] = {}
+        # Actions that returned HTTP 400 "action not found" from the controller.
+        # Entries here are treated as unsupported for this device/firmware.
+        self._unsupported_actions: set[str] = set()
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -224,6 +227,23 @@ class UniFiDisplayAPI:
             if isinstance(device, dict) and device.get("id") == self._device_id:
                 self._update_action_id_map_from_device(device)
                 return
+
+    def is_action_supported(self, action_name: str) -> bool:
+        """Return whether ``action_name`` is supported by this device.
+
+        An action is considered unsupported once the controller has
+        returned HTTP 400 "action not found" for it.  Until the controller
+        confirms the action is unsupported, this returns ``True`` so that
+        entities remain available by default.
+
+        Args:
+            action_name: The action name to check (e.g. ``"display_on"``).
+
+        Returns:
+            ``False`` if the controller has rejected this action as unknown;
+            ``True`` otherwise.
+        """
+        return action_name not in self._unsupported_actions
 
     # ------------------------------------------------------------------
     # Authentication
@@ -512,13 +532,15 @@ class UniFiDisplayAPI:
             "name": action_name,
             "args": args or {},
         }
+        # Match the browser/web-UI request: Cookie + X-CSRF-Token + Origin only.
+        # Do NOT send an Authorization: Bearer header; some controller builds
+        # reject action PATCH requests that include it and return HTTP 400.
         headers = {
             "Content-Type": "application/json; charset=utf-8",
             "X-CSRF-Token": self._csrf_token or "",
             "Origin": self._host,
         }
         if self._token:
-            headers["Authorization"] = f"Bearer {self._token}"
             headers["Cookie"] = f"TOKEN={self._token}"
 
         try:
@@ -529,11 +551,21 @@ class UniFiDisplayAPI:
                     except Exception:  # noqa: BLE001
                         resp_body = "<unreadable>"
                     _LOGGER.debug(
-                        "send_action '%s': HTTP %s, response: %s",
+                        "send_action '%s' (device=%s, url=%s): HTTP %s, response: %s",
                         action_name,
+                        self._device_id,
+                        url,
                         resp.status,
                         resp_body,
                     )
+                    if resp.status == 400 and "action not found" in resp_body:
+                        _LOGGER.warning(
+                            "Action '%s' is not supported by device %s; "
+                            "marking as unavailable to prevent further errors.",
+                            action_name,
+                            self._device_id,
+                        )
+                        self._unsupported_actions.add(action_name)
                 if resp.status in (401, 403):
                     _LOGGER.debug(
                         "send_action '%s': HTTP %s, re-authenticating",
@@ -543,10 +575,8 @@ class UniFiDisplayAPI:
                     await self.authenticate()
                     headers["X-CSRF-Token"] = self._csrf_token or ""
                     if self._token:
-                        headers["Authorization"] = f"Bearer {self._token}"
                         headers["Cookie"] = f"TOKEN={self._token}"
                     else:
-                        headers.pop("Authorization", None)
                         headers.pop("Cookie", None)
                     async with session.patch(
                         url, json=body, headers=headers
