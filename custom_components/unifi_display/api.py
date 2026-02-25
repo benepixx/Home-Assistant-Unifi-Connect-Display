@@ -100,6 +100,36 @@ class UniFiDisplayAPI:
         return self._session
 
     @staticmethod
+    def _extract_token_from_set_cookie_headers(headers) -> Optional[str]:
+        """Extract the TOKEN value by parsing ``Set-Cookie`` response headers.
+
+        This handles controllers that return cookies with the ``Partitioned``
+        attribute (CHIPS), which some cookie jars reject or ignore.
+
+        Args:
+            headers: The response headers object.  Supports ``getall`` for
+                multi-value header access (e.g. aiohttp's
+                ``CIMultiDictProxy``), or falls back to a plain mapping.
+
+        Returns:
+            The raw TOKEN cookie value string, or ``None`` if not found.
+        """
+        try:
+            set_cookie_values = (
+                headers.getall("Set-Cookie", [])
+                if hasattr(headers, "getall")
+                else ([headers["Set-Cookie"]] if "Set-Cookie" in headers else [])
+            )
+        except Exception:  # noqa: BLE001
+            return None
+        for cookie_str in set_cookie_values:
+            # Each Set-Cookie value: name=value[; attr[; attr=val ...]]
+            name_value = cookie_str.split(";")[0].strip()
+            if name_value.startswith("TOKEN="):
+                return name_value[len("TOKEN="):]
+        return None
+
+    @staticmethod
     def _extract_csrf_from_jwt(jwt_token: str) -> Optional[str]:
         """Decode a JWT and return the ``csrfToken`` claim, or ``None``."""
         try:
@@ -123,6 +153,7 @@ class UniFiDisplayAPI:
             headers["X-CSRF-Token"] = self._csrf_token
         if self._token:
             headers["Authorization"] = f"Bearer {self._token}"
+            headers["Cookie"] = f"TOKEN={self._token}"
         return headers
 
     # ------------------------------------------------------------------
@@ -146,6 +177,7 @@ class UniFiDisplayAPI:
         _LOGGER.debug("Authenticating against URL: %s", url)
         payload = {"username": self._username, "password": self._password}
 
+        token_from_headers: Optional[str] = None
         try:
             async with session.post(url, json=payload) as resp:
                 _LOGGER.debug(
@@ -172,10 +204,37 @@ class UniFiDisplayAPI:
                     raise AuthenticationError(
                         f"Unexpected login response body: {body}"
                     )
+
+                # Capture TOKEN from Set-Cookie headers while the response is
+                # still open.  This handles controllers that set the cookie
+                # with the ``Partitioned`` attribute, which some cookie jars
+                # reject or ignore.
+                token_from_headers = self._extract_token_from_set_cookie_headers(
+                    resp.headers
+                )
         except aiohttp.ClientError as exc:
             raise CannotConnectError(str(exc)) from exc
 
-        # Extract CSRF token from the TOKEN cookie (JWT).
+        # Prefer the token parsed directly from Set-Cookie headers (handles
+        # the ``Partitioned`` / CHIPS attribute).  Fall back to the cookie jar
+        # for older controllers where the attribute is absent and the jar works.
+        if token_from_headers:
+            self._token = token_from_headers
+            self._csrf_token = self._extract_csrf_from_jwt(token_from_headers)
+            _LOGGER.debug(
+                "TOKEN recovered from Set-Cookie header parsing (len=%d).",
+                len(token_from_headers),
+            )
+            if not self._csrf_token:
+                _LOGGER.warning(
+                    "Logged in successfully but could not extract CSRF token "
+                    "from TOKEN cookie; some requests may fail."
+                )
+            else:
+                _LOGGER.debug("CSRF token extracted successfully.")
+            return
+
+        # Fall back to cookie jar (older controllers without Partitioned).
         cookies = session.cookie_jar.filter_cookies(url)
         _LOGGER.debug(
             "Cookies after login: %s",
@@ -185,6 +244,10 @@ class UniFiDisplayAPI:
         if token_cookie:
             self._token = token_cookie.value
             self._csrf_token = self._extract_csrf_from_jwt(token_cookie.value)
+            _LOGGER.debug(
+                "TOKEN obtained from cookie jar (len=%d).",
+                len(self._token),
+            )
             if not self._csrf_token:
                 _LOGGER.warning(
                     "Logged in successfully but could not extract CSRF token "
@@ -305,6 +368,7 @@ class UniFiDisplayAPI:
         }
         if self._token:
             headers["Authorization"] = f"Bearer {self._token}"
+            headers["Cookie"] = f"TOKEN={self._token}"
 
         try:
             async with session.patch(url, json=body, headers=headers) as resp:
@@ -313,8 +377,10 @@ class UniFiDisplayAPI:
                     headers["X-CSRF-Token"] = self._csrf_token or ""
                     if self._token:
                         headers["Authorization"] = f"Bearer {self._token}"
+                        headers["Cookie"] = f"TOKEN={self._token}"
                     else:
                         headers.pop("Authorization", None)
+                        headers.pop("Cookie", None)
                     async with session.patch(
                         url, json=body, headers=headers
                     ) as retry:

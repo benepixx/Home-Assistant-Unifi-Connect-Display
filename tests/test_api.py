@@ -31,13 +31,19 @@ def _make_jwt(csrf_token: str = "test-csrf-token") -> str:
     return f"{header}.{payload}.signature"
 
 
-def _mock_response(status: int = 200, json_data=None):
+def _mock_response(status: int = 200, json_data=None, set_cookie: str | None = None):
     """Create a mock aiohttp response."""
     resp = MagicMock()
     resp.status = status
     resp.json = AsyncMock(return_value=json_data if json_data is not None else {})
     resp.__aenter__ = AsyncMock(return_value=resp)
     resp.__aexit__ = AsyncMock(return_value=False)
+    if set_cookie is not None:
+        resp.headers = MagicMock()
+        resp.headers.getall = MagicMock(return_value=[set_cookie])
+    else:
+        resp.headers = MagicMock()
+        resp.headers.getall = MagicMock(return_value=[])
     return resp
 
 
@@ -77,6 +83,54 @@ class TestExtractCsrfFromJwt:
 
 
 # ---------------------------------------------------------------------------
+# _extract_token_from_set_cookie_headers
+# ---------------------------------------------------------------------------
+
+class TestExtractTokenFromSetCookieHeaders:
+    def test_extracts_token_from_plain_set_cookie(self):
+        headers = {"Set-Cookie": "TOKEN=abc123; path=/; httponly"}
+        result = UniFiDisplayAPI._extract_token_from_set_cookie_headers(headers)
+        assert result == "abc123"
+
+    def test_extracts_token_with_partitioned_attribute(self):
+        jwt = _make_jwt("csrf-xyz")
+        set_cookie = f"TOKEN={jwt}; path=/; samesite=none; secure; httponly; partitioned"
+        headers = {"Set-Cookie": set_cookie}
+        result = UniFiDisplayAPI._extract_token_from_set_cookie_headers(headers)
+        assert result == jwt
+
+    def test_returns_none_when_no_token_cookie(self):
+        headers = {"Set-Cookie": "SESSION=xyz; path=/"}
+        result = UniFiDisplayAPI._extract_token_from_set_cookie_headers(headers)
+        assert result is None
+
+    def test_returns_none_when_no_set_cookie_header(self):
+        headers = {"Content-Type": "application/json"}
+        result = UniFiDisplayAPI._extract_token_from_set_cookie_headers(headers)
+        assert result is None
+
+    def test_uses_getall_for_multidict(self):
+        """Supports multi-value headers (e.g. aiohttp CIMultiDictProxy)."""
+        jwt = _make_jwt("csrf-multi")
+        mock_headers = MagicMock()
+        mock_headers.getall = MagicMock(
+            return_value=[
+                "SESSION=other; path=/",
+                f"TOKEN={jwt}; path=/; partitioned",
+            ]
+        )
+        result = UniFiDisplayAPI._extract_token_from_set_cookie_headers(mock_headers)
+        assert result == jwt
+
+    def test_returns_none_on_exception(self):
+        headers = MagicMock()
+        headers.getall = MagicMock(side_effect=RuntimeError("fail"))
+        del headers.__contains__  # ensure plain-dict fallback also fails
+        result = UniFiDisplayAPI._extract_token_from_set_cookie_headers(headers)
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
 # Host normalisation
 # ---------------------------------------------------------------------------
 
@@ -111,9 +165,21 @@ class TestAuthenticate:
     def api(self):
         return UniFiDisplayAPI("192.168.1.100", "admin", "pass", "dev-id")
 
-    def _mock_session(self, status: int, body: dict, jwt: str | None = None):
-        """Build a mock session for authenticate() calls."""
-        resp = _mock_response(status=status, json_data=body)
+    def _mock_session(
+        self,
+        status: int,
+        body: dict,
+        jwt: str | None = None,
+        set_cookie: str | None = None,
+    ):
+        """Build a mock session for authenticate() calls.
+
+        Args:
+            jwt: If set, the cookie jar returns a TOKEN cookie with this value.
+            set_cookie: If set, the response ``Set-Cookie`` header contains
+                this raw cookie string (simulates the ``Partitioned`` scenario).
+        """
+        resp = _mock_response(status=status, json_data=body, set_cookie=set_cookie)
         session = MagicMock()
         session.closed = False
         session.post = MagicMock(return_value=resp)
@@ -139,6 +205,39 @@ class TestAuthenticate:
         with patch.object(api, "_get_session", AsyncMock(return_value=session)):
             await api.authenticate()
         assert api._csrf_token == "csrf-abc"
+
+    @pytest.mark.asyncio
+    async def test_partitioned_cookie_sets_csrf_token(self, api):
+        """TOKEN in Set-Cookie with Partitioned attribute is parsed correctly."""
+        jwt = _make_jwt("csrf-partitioned")
+        set_cookie = (
+            f"TOKEN={jwt}; path=/; samesite=none; secure; httponly; partitioned"
+        )
+        # Cookie jar returns nothing (simulates Partitioned rejection).
+        session = self._mock_session(
+            status=200, body={"unique_id": "u1"}, set_cookie=set_cookie
+        )
+        with patch.object(api, "_get_session", AsyncMock(return_value=session)):
+            await api.authenticate()
+        assert api._csrf_token == "csrf-partitioned"
+        assert api._token == jwt
+
+    @pytest.mark.asyncio
+    async def test_set_cookie_header_takes_priority_over_jar(self, api):
+        """When both Set-Cookie header and cookie jar provide TOKEN, header wins."""
+        jwt_header = _make_jwt("csrf-from-header")
+        jwt_jar = _make_jwt("csrf-from-jar")
+        set_cookie = f"TOKEN={jwt_header}; path=/; partitioned"
+        session = self._mock_session(
+            status=200,
+            body={"unique_id": "u1"},
+            jwt=jwt_jar,
+            set_cookie=set_cookie,
+        )
+        with patch.object(api, "_get_session", AsyncMock(return_value=session)):
+            await api.authenticate()
+        assert api._csrf_token == "csrf-from-header"
+        assert api._token == jwt_header
 
     @pytest.mark.asyncio
     async def test_raises_auth_error_on_non_200(self, api):
