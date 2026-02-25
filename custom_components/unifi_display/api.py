@@ -198,7 +198,15 @@ class UniFiDisplayAPI:
                 is expected to be a list of ``{"id": <uuid>, "name": <str>}``
                 objects.
         """
-        supported = device.get("supportedActions", [])
+        supported = device.get("supportedActions")
+        if not isinstance(supported, list):
+            # Also check device["type"]["supportedActions"] (firmware >= 1.13.6).
+            type_info = device.get("type")
+            supported = (
+                type_info.get("supportedActions", [])
+                if isinstance(type_info, dict)
+                else []
+            )
         if not isinstance(supported, list):
             return
         new_entries: dict[str, str] = {}
