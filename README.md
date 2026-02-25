@@ -148,3 +148,4 @@ python -m pytest tests/ -v
 | `No displays found` error | Display not connected to controller | Check the display is online in the UniFi interface |
 | Actions not working | Session expired | Restart Home Assistant to force re-authentication |
 | SSL errors | Self-signed certificate | Uncheck *Verify SSL certificate* during setup |
+| HTTP 400 "action not found" / entity shows unavailable | Action not supported on this firmware version | The controller rejected the action as unknown. Available actions vary by display model and firmware. The affected entity will be marked unavailable automatically so it no longer causes errors. Check the Home Assistant logs for the specific action name, then verify it is listed under the device's *Supported Actions* in the UniFi Connect interface. |

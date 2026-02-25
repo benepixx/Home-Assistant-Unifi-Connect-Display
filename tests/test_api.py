@@ -495,6 +495,129 @@ class TestSendAction:
         assert captured_body["id"] == known_uuid
         assert captured_body["name"] == "display_on"
 
+    @pytest.mark.asyncio
+    async def test_no_authorization_header_in_send_action(self, api):
+        """send_action must NOT include an Authorization: Bearer header."""
+        api._token = "my-token"
+        captured_headers = {}
+
+        resp = MagicMock()
+        resp.status = 200
+        resp.__aenter__ = AsyncMock(return_value=resp)
+        resp.__aexit__ = AsyncMock(return_value=False)
+
+        session = MagicMock()
+        session.closed = False
+
+        def fake_patch(url, json=None, headers=None):
+            captured_headers.update(headers or {})
+            return resp
+
+        session.patch = fake_patch
+
+        with patch.object(api, "_get_session", AsyncMock(return_value=session)):
+            await api.send_action("display_on")
+
+        assert "Authorization" not in captured_headers
+        assert captured_headers.get("Cookie") == "TOKEN=my-token"
+        assert "X-CSRF-Token" in captured_headers
+        assert "Origin" in captured_headers
+
+    @pytest.mark.asyncio
+    async def test_reauth_retry_no_authorization_header(self, api):
+        """After re-auth on 403, the retry PATCH should also omit Authorization."""
+        api._token = "initial-token"
+        resp_403 = _mock_response(status=403)
+        resp_200 = _mock_response(status=200)
+
+        captured_retry_headers = {}
+
+        session = MagicMock()
+        session.closed = False
+
+        call_count = [0]
+        original_patch = MagicMock(side_effect=[resp_403, resp_200])
+
+        def fake_patch(url, json=None, headers=None):
+            call_count[0] += 1
+            if call_count[0] == 2:
+                captured_retry_headers.update(headers or {})
+            return original_patch(url, json=json, headers=headers)
+
+        session.patch = fake_patch
+
+        with patch.object(api, "_get_session", AsyncMock(return_value=session)):
+            with patch.object(api, "authenticate", AsyncMock()):
+                await api.send_action("display_on")
+
+        assert "Authorization" not in captured_retry_headers
+
+    @pytest.mark.asyncio
+    async def test_marks_unsupported_action_on_400(self, api):
+        """HTTP 400 'action not found' marks the action in _unsupported_actions."""
+        resp = MagicMock()
+        resp.status = 400
+        resp.text = AsyncMock(
+            return_value='{"err":{"msg":"invalid action: action not found"}}'
+        )
+        resp.__aenter__ = AsyncMock(return_value=resp)
+        resp.__aexit__ = AsyncMock(return_value=False)
+
+        session = MagicMock()
+        session.closed = False
+        session.patch = MagicMock(return_value=resp)
+
+        with patch.object(api, "_get_session", AsyncMock(return_value=session)):
+            result = await api.send_action("enable_auto_rotate")
+
+        assert result is False
+        assert "enable_auto_rotate" in api._unsupported_actions
+
+    @pytest.mark.asyncio
+    async def test_non_json_response_body_logged_without_crash(self, api):
+        """A non-JSON (plain text) response body on failure should not cause a crash."""
+        resp = MagicMock()
+        resp.status = 500
+        resp.text = AsyncMock(return_value="Internal Server Error")
+        resp.__aenter__ = AsyncMock(return_value=resp)
+        resp.__aexit__ = AsyncMock(return_value=False)
+
+        session = MagicMock()
+        session.closed = False
+        session.patch = MagicMock(return_value=resp)
+
+        with patch.object(api, "_get_session", AsyncMock(return_value=session)):
+            result = await api.send_action("display_on")
+
+        assert result is False  # 500 → False, no crash
+
+    def test_is_action_supported_returns_true_by_default(self, api):
+        """Actions not yet tested are considered supported."""
+        assert api.is_action_supported("display_on") is True
+
+    def test_is_action_supported_returns_false_after_rejection(self, api):
+        """Actions added to _unsupported_actions are reported as unsupported."""
+        api._unsupported_actions.add("enable_auto_rotate")
+        assert api.is_action_supported("enable_auto_rotate") is False
+
+    @pytest.mark.asyncio
+    async def test_400_non_action_not_found_does_not_mark_unsupported(self, api):
+        """HTTP 400 without 'action not found' in body should not mark action unsupported."""
+        resp = MagicMock()
+        resp.status = 400
+        resp.text = AsyncMock(return_value='{"error": "bad request"}')
+        resp.__aenter__ = AsyncMock(return_value=resp)
+        resp.__aexit__ = AsyncMock(return_value=False)
+
+        session = MagicMock()
+        session.closed = False
+        session.patch = MagicMock(return_value=resp)
+
+        with patch.object(api, "_get_session", AsyncMock(return_value=session)):
+            await api.send_action("display_on")
+
+        assert "display_on" not in api._unsupported_actions
+
 
 # ---------------------------------------------------------------------------
 # get_devices

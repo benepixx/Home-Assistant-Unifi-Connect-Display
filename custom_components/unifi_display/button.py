@@ -58,3 +58,8 @@ class UniFiDisplayButton(ButtonEntity):
         if not success:
             _LOGGER.error("Failed to send action '%s' to display", self._action)
 
+    @property
+    def available(self) -> bool:
+        """Return False when the controller has flagged this action as unsupported."""
+        return self._api.is_action_supported(self._action)
+
