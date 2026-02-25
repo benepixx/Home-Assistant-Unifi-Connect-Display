@@ -1,6 +1,7 @@
 # UniFi Connect Display – Home Assistant Integration
 
-A fully functional Home Assistant custom integration for controlling [UniFi Connect Display](https://ui.com/display) devices directly from your Home Assistant instance, without relying on HACS.
+A semi functional Home Assistant custom integration for controlling [UniFi Connect Display](https://ui.com/display) devices directly from your Home Assistant instance.
+it works for what i need to to do for now. which is turn on and off the display from HA. some features work. some dont but im not in a major rush to fix them. feel free to send pull requests with fixed features.
 
 ---
 
