@@ -2,12 +2,16 @@
 
 Authentication flow (mirrored from working shell scripts):
   1. POST /api/auth/login  →  receives a TOKEN cookie (JWT).
-  2. Decode the JWT payload (base64) and extract the ``csrfToken`` field.
+  2. CSRF token is extracted from response headers ``X-Updated-Csrf-Token`` /
+     ``X-CSRF-Token`` (current controllers), or from the JWT payload
+     ``csrfToken`` field (legacy fallback).
   3. All subsequent requests include the session cookie *and* the
      ``X-CSRF-Token`` header obtained in step 2.
   4. Display actions are sent as PATCH requests to
      /proxy/connect/api/v2/devices/{device_id}/status with a JSON body of
-     ``{"id": "<uuid>", "name": "<action>", "args": {...}}``.
+     ``{"id": "<supported_action_uuid>", "name": "<action>", "args": {...}}``.
+     The ``id`` must be the UUID from ``supportedActions`` for the device,
+     not a random UUID.
 """
 from __future__ import annotations
 
@@ -99,6 +103,9 @@ class UniFiDisplayAPI:
         self._session: Optional[aiohttp.ClientSession] = None
         self._csrf_token: Optional[str] = None
         self._token: Optional[str] = None
+        # Maps supported action name → supported action UUID for this device.
+        # Populated from ``supportedActions`` in device API responses.
+        self._action_id_map: dict[str, str] = {}
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -179,6 +186,45 @@ class UniFiDisplayAPI:
             headers["Cookie"] = f"TOKEN={self._token}"
         return headers
 
+    def _update_action_id_map_from_device(self, device: dict[str, Any]) -> None:
+        """Update ``_action_id_map`` from ``supportedActions`` in a device dict.
+
+        Args:
+            device: A single device dictionary (already unwrapped from any
+                API wrapper).  The ``supportedActions`` key, if present,
+                is expected to be a list of ``{"id": <uuid>, "name": <str>}``
+                objects.
+        """
+        supported = device.get("supportedActions", [])
+        if not isinstance(supported, list):
+            return
+        new_entries: dict[str, str] = {}
+        for action in supported:
+            if not isinstance(action, dict):
+                continue
+            name = action.get("name")
+            uid = action.get("id")
+            if name and uid:
+                new_entries[name] = uid
+        if new_entries:
+            self._action_id_map.update(new_entries)
+            _LOGGER.debug(
+                "Updated action ID map with %d entry/entries for device %s",
+                len(self._action_id_map),
+                self._device_id,
+            )
+
+    def _update_action_id_map(self, devices: list[dict[str, Any]]) -> None:
+        """Update ``_action_id_map`` from the matching device in a device list.
+
+        Args:
+            devices: List of device dicts as returned by the devices endpoint.
+        """
+        for device in devices:
+            if isinstance(device, dict) and device.get("id") == self._device_id:
+                self._update_action_id_map_from_device(device)
+                return
+
     # ------------------------------------------------------------------
     # Authentication
     # ------------------------------------------------------------------
@@ -201,6 +247,7 @@ class UniFiDisplayAPI:
         payload = {"username": self._username, "password": self._password}
 
         token_from_headers: Optional[str] = None
+        csrf_from_response_header: Optional[str] = None
         try:
             async with session.post(url, json=payload) as resp:
                 _LOGGER.debug(
@@ -235,6 +282,16 @@ class UniFiDisplayAPI:
                 token_from_headers = self._extract_token_from_set_cookie_headers(
                     resp.headers
                 )
+                # Prefer CSRF from response headers (current controllers send
+                # it via ``X-Updated-Csrf-Token`` or ``X-CSRF-Token``).
+                csrf_from_response_header = (
+                    resp.headers.get("X-Updated-Csrf-Token")
+                    or resp.headers.get("X-CSRF-Token")
+                )
+                _LOGGER.debug(
+                    "CSRF from response header: %s",
+                    bool(csrf_from_response_header),
+                )
         except aiohttp.ClientError as exc:
             raise CannotConnectError(str(exc)) from exc
 
@@ -243,7 +300,11 @@ class UniFiDisplayAPI:
         # for older controllers where the attribute is absent and the jar works.
         if token_from_headers:
             self._token = token_from_headers
-            self._csrf_token = self._extract_csrf_from_jwt(token_from_headers)
+            # Prefer CSRF from response header; fall back to JWT extraction.
+            self._csrf_token = (
+                csrf_from_response_header
+                or self._extract_csrf_from_jwt(token_from_headers)
+            )
             _LOGGER.debug(
                 "TOKEN recovered from Set-Cookie header parsing (len=%d).",
                 len(token_from_headers),
@@ -266,7 +327,11 @@ class UniFiDisplayAPI:
         token_cookie = cookies.get("TOKEN")
         if token_cookie:
             self._token = token_cookie.value
-            self._csrf_token = self._extract_csrf_from_jwt(token_cookie.value)
+            # Prefer CSRF from response header; fall back to JWT extraction.
+            self._csrf_token = (
+                csrf_from_response_header
+                or self._extract_csrf_from_jwt(token_cookie.value)
+            )
             _LOGGER.debug(
                 "TOKEN obtained from cookie jar (len=%d).",
                 len(self._token),
@@ -314,9 +379,13 @@ class UniFiDisplayAPI:
                         url, headers=self._auth_headers()
                     ) as retry:
                         data = await retry.json(content_type=None)
-                        return _parse_devices_response(data)
+                        devices = _parse_devices_response(data)
+                        self._update_action_id_map(devices)
+                        return devices
                 data = await resp.json(content_type=None)
-                return _parse_devices_response(data)
+                devices = _parse_devices_response(data)
+                self._update_action_id_map(devices)
+                return devices
         except aiohttp.ClientError as exc:
             raise CannotConnectError(str(exc)) from exc
 
@@ -392,9 +461,13 @@ class UniFiDisplayAPI:
                         url, headers=self._auth_headers()
                     ) as retry:
                         data = await retry.json(content_type=None)
-                        return self._parse_device_status(data)
+                        result = self._parse_device_status(data)
+                        self._update_action_id_map_from_device(result)
+                        return result
                 data = await resp.json(content_type=None)
-                return self._parse_device_status(data)
+                result = self._parse_device_status(data)
+                self._update_action_id_map_from_device(result)
+                return result
         except aiohttp.ClientError as exc:
             raise CannotConnectError(str(exc)) from exc
 
@@ -421,8 +494,12 @@ class UniFiDisplayAPI:
 
         session = await self._get_session()
         url = f"{self._host}{API_DEVICE_STATUS_PATH.format(device_id=self._device_id)}"
+        # Use the supported action UUID if available; fall back to a random
+        # UUID for backward compatibility with controllers that may not enforce
+        # the action ID check.
+        action_id = self._action_id_map.get(action_name) or str(uuid.uuid4())
         body = {
-            "id": str(uuid.uuid4()),
+            "id": action_id,
             "name": action_name,
             "args": args or {},
         }
@@ -437,6 +514,17 @@ class UniFiDisplayAPI:
 
         try:
             async with session.patch(url, json=body, headers=headers) as resp:
+                if resp.status not in (200, 201, 204):
+                    try:
+                        resp_body = await resp.text()
+                    except Exception:  # noqa: BLE001
+                        resp_body = "<unreadable>"
+                    _LOGGER.debug(
+                        "send_action '%s': HTTP %s, response: %s",
+                        action_name,
+                        resp.status,
+                        resp_body,
+                    )
                 if resp.status in (401, 403):
                     _LOGGER.debug(
                         "send_action '%s': HTTP %s, re-authenticating",

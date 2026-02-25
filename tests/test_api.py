@@ -32,19 +32,24 @@ def _make_jwt(csrf_token: str = "test-csrf-token") -> str:
     return f"{header}.{payload}.signature"
 
 
-def _mock_response(status: int = 200, json_data=None, set_cookie: str | None = None):
+def _mock_response(status: int = 200, json_data=None, set_cookie: str | None = None, csrf_header: str | None = None):
     """Create a mock aiohttp response."""
     resp = MagicMock()
     resp.status = status
     resp.json = AsyncMock(return_value=json_data if json_data is not None else {})
     resp.__aenter__ = AsyncMock(return_value=resp)
     resp.__aexit__ = AsyncMock(return_value=False)
+    resp.headers = MagicMock()
     if set_cookie is not None:
-        resp.headers = MagicMock()
         resp.headers.getall = MagicMock(return_value=[set_cookie])
     else:
-        resp.headers = MagicMock()
         resp.headers.getall = MagicMock(return_value=[])
+    # Configure .get() to return csrf_header for CSRF header names, None otherwise.
+    def _headers_get(key, default=None):
+        if key in ("X-Updated-Csrf-Token", "X-CSRF-Token"):
+            return csrf_header
+        return default
+    resp.headers.get = MagicMock(side_effect=_headers_get)
     return resp
 
 
@@ -172,6 +177,7 @@ class TestAuthenticate:
         body: dict,
         jwt: str | None = None,
         set_cookie: str | None = None,
+        csrf_header: str | None = None,
     ):
         """Build a mock session for authenticate() calls.
 
@@ -179,8 +185,10 @@ class TestAuthenticate:
             jwt: If set, the cookie jar returns a TOKEN cookie with this value.
             set_cookie: If set, the response ``Set-Cookie`` header contains
                 this raw cookie string (simulates the ``Partitioned`` scenario).
+            csrf_header: If set, the response ``X-Updated-Csrf-Token`` header
+                returns this value (simulates current controller behaviour).
         """
-        resp = _mock_response(status=status, json_data=body, set_cookie=set_cookie)
+        resp = _mock_response(status=status, json_data=body, set_cookie=set_cookie, csrf_header=csrf_header)
         session = MagicMock()
         session.closed = False
         session.post = MagicMock(return_value=resp)
@@ -271,6 +279,35 @@ class TestAuthenticate:
         with patch.object(api, "_get_session", AsyncMock(return_value=session)):
             with pytest.raises(CannotConnectError):
                 await api.authenticate()
+
+    @pytest.mark.asyncio
+    async def test_csrf_from_response_header_takes_priority(self, api):
+        """X-Updated-Csrf-Token response header takes priority over JWT extraction."""
+        jwt = _make_jwt("csrf-from-jwt")
+        set_cookie = f"TOKEN={jwt}; path=/; partitioned"
+        session = self._mock_session(
+            status=200,
+            body={"unique_id": "u1"},
+            set_cookie=set_cookie,
+            csrf_header="csrf-from-response-header",
+        )
+        with patch.object(api, "_get_session", AsyncMock(return_value=session)):
+            await api.authenticate()
+        assert api._csrf_token == "csrf-from-response-header"
+
+    @pytest.mark.asyncio
+    async def test_csrf_from_header_with_cookie_jar_fallback(self, api):
+        """CSRF from response header is used even when token comes from cookie jar."""
+        jwt = _make_jwt("csrf-from-jwt")
+        session = self._mock_session(
+            status=200,
+            body={"unique_id": "u1"},
+            jwt=jwt,
+            csrf_header="csrf-header-value",
+        )
+        with patch.object(api, "_get_session", AsyncMock(return_value=session)):
+            await api.authenticate()
+        assert api._csrf_token == "csrf-header-value"
 
 
 # ---------------------------------------------------------------------------
@@ -368,6 +405,62 @@ class TestSendAction:
                 result = await api.send_action("display_on")
 
         assert result is True
+
+    @pytest.mark.asyncio
+    async def test_uses_action_id_from_map(self, api):
+        """When _action_id_map has the action, its UUID is used in the body."""
+        known_uuid = "ea959362-c56f-4932-ab8b-0f512a93460c"
+        api._action_id_map = {"display_off": known_uuid}
+        captured_body = {}
+
+        resp = MagicMock()
+        resp.status = 200
+        resp.__aenter__ = AsyncMock(return_value=resp)
+        resp.__aexit__ = AsyncMock(return_value=False)
+
+        session = MagicMock()
+        session.closed = False
+
+        def fake_patch(url, json=None, headers=None):
+            captured_body.update(json or {})
+            return resp
+
+        session.patch = fake_patch
+
+        with patch.object(api, "_get_session", AsyncMock(return_value=session)):
+            await api.send_action("display_off")
+
+        assert captured_body["id"] == known_uuid
+        assert captured_body["name"] == "display_off"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_random_uuid_when_action_not_in_map(self, api):
+        """When action is not in _action_id_map, a UUID is still sent."""
+        import re
+        api._action_id_map = {}
+        captured_body = {}
+
+        resp = MagicMock()
+        resp.status = 200
+        resp.__aenter__ = AsyncMock(return_value=resp)
+        resp.__aexit__ = AsyncMock(return_value=False)
+
+        session = MagicMock()
+        session.closed = False
+
+        def fake_patch(url, json=None, headers=None):
+            captured_body.update(json or {})
+            return resp
+
+        session.patch = fake_patch
+
+        with patch.object(api, "_get_session", AsyncMock(return_value=session)):
+            await api.send_action("display_on")
+
+        uuid_re = re.compile(
+            r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        )
+        assert uuid_re.match(captured_body["id"]), f"Expected UUID, got: {captured_body['id']}"
 
 
 # ---------------------------------------------------------------------------
@@ -559,10 +652,88 @@ class TestGetDeviceStatus:
                 await api.get_device_status()
 
 
+# ---------------------------------------------------------------------------
+# _update_action_id_map / _update_action_id_map_from_device
+# ---------------------------------------------------------------------------
 
-# ---------------------------------------------------------------------------
-# close
-# ---------------------------------------------------------------------------
+class TestActionIdMap:
+    @pytest.fixture
+    def api(self):
+        return UniFiDisplayAPI("192.168.1.100", "admin", "pass", "dev-id")
+
+    def test_update_from_device_populates_map(self, api):
+        device = {
+            "id": "dev-id",
+            "supportedActions": [
+                {"id": "uuid-1", "name": "display_on"},
+                {"id": "uuid-2", "name": "display_off"},
+            ],
+        }
+        api._update_action_id_map_from_device(device)
+        assert api._action_id_map["display_on"] == "uuid-1"
+        assert api._action_id_map["display_off"] == "uuid-2"
+
+    def test_update_from_device_ignores_missing_fields(self, api):
+        device = {
+            "supportedActions": [
+                {"id": "uuid-1"},           # missing name
+                {"name": "display_on"},     # missing id
+                {"id": "uuid-3", "name": "reboot"},
+            ],
+        }
+        api._update_action_id_map_from_device(device)
+        assert "display_on" not in api._action_id_map
+        assert api._action_id_map["reboot"] == "uuid-3"
+
+    def test_update_from_device_handles_missing_supported_actions(self, api):
+        api._update_action_id_map_from_device({"id": "dev-id"})
+        assert api._action_id_map == {}
+
+    def test_update_from_device_handles_non_list_supported_actions(self, api):
+        api._update_action_id_map_from_device({"supportedActions": "not-a-list"})
+        assert api._action_id_map == {}
+
+    def test_update_action_id_map_finds_matching_device(self, api):
+        devices = [
+            {"id": "other-dev", "supportedActions": [{"id": "x", "name": "display_on"}]},
+            {
+                "id": "dev-id",
+                "supportedActions": [{"id": "uuid-correct", "name": "display_on"}],
+            },
+        ]
+        api._update_action_id_map(devices)
+        assert api._action_id_map["display_on"] == "uuid-correct"
+
+    def test_update_action_id_map_no_matching_device(self, api):
+        devices = [
+            {"id": "other-dev", "supportedActions": [{"id": "x", "name": "display_on"}]},
+        ]
+        api._update_action_id_map(devices)
+        assert api._action_id_map == {}
+
+    def test_get_device_status_updates_action_id_map(self, api):
+        """get_device_status() updates the action ID map when supportedActions present."""
+        import asyncio
+
+        async def _run():
+            api._csrf_token = "csrf"
+            device_data = {
+                "brightness": 80,
+                "supportedActions": [
+                    {"id": "uuid-on", "name": "display_on"},
+                    {"id": "uuid-off", "name": "display_off"},
+                ],
+            }
+            resp = _mock_response(status=200, json_data=device_data)
+            session = MagicMock()
+            session.closed = False
+            session.get = MagicMock(return_value=resp)
+            with patch.object(api, "_get_session", AsyncMock(return_value=session)):
+                await api.get_device_status()
+
+        asyncio.get_event_loop().run_until_complete(_run())
+        assert api._action_id_map["display_on"] == "uuid-on"
+        assert api._action_id_map["display_off"] == "uuid-off"
 
 class TestClose:
     @pytest.mark.asyncio
