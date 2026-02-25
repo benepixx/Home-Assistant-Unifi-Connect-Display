@@ -492,6 +492,15 @@ class UniFiDisplayAPI:
         if self._csrf_token is None:
             await self.authenticate()
 
+        # If the action UUID is not yet known, try fetching the device list to
+        # populate the map before falling back to a random UUID (which current
+        # controller builds reject as "action not found").
+        if action_name not in self._action_id_map:
+            try:
+                await self.get_devices()
+            except Exception:  # noqa: BLE001
+                pass
+
         session = await self._get_session()
         url = f"{self._host}{API_DEVICE_STATUS_PATH.format(device_id=self._device_id)}"
         # Use the supported action UUID if available; fall back to a random

@@ -455,12 +455,45 @@ class TestSendAction:
         session.patch = fake_patch
 
         with patch.object(api, "_get_session", AsyncMock(return_value=session)):
-            await api.send_action("display_on")
+            with patch.object(api, "get_devices", AsyncMock(return_value=[])):
+                await api.send_action("display_on")
 
         uuid_re = re.compile(
             r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
         )
         assert uuid_re.match(captured_body["id"]), f"Expected UUID, got: {captured_body['id']}"
+
+    @pytest.mark.asyncio
+    async def test_fetches_devices_to_populate_action_id_map_when_empty(self, api):
+        """send_action calls get_devices() to populate action UUID map when action is missing."""
+        known_uuid = "06ad25d0-b087-46de-8e9b-7b18339e7238"
+        api._action_id_map = {}
+        captured_body = {}
+
+        resp = MagicMock()
+        resp.status = 200
+        resp.__aenter__ = AsyncMock(return_value=resp)
+        resp.__aexit__ = AsyncMock(return_value=False)
+
+        session = MagicMock()
+        session.closed = False
+
+        def fake_patch(url, json=None, headers=None):
+            captured_body.update(json or {})
+            return resp
+
+        session.patch = fake_patch
+
+        async def fake_get_devices():
+            api._action_id_map["display_on"] = known_uuid
+            return []
+
+        with patch.object(api, "_get_session", AsyncMock(return_value=session)):
+            with patch.object(api, "get_devices", AsyncMock(side_effect=fake_get_devices)):
+                await api.send_action("display_on")
+
+        assert captured_body["id"] == known_uuid
+        assert captured_body["name"] == "display_on"
 
 
 # ---------------------------------------------------------------------------
