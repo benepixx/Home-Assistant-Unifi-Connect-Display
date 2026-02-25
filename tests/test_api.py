@@ -89,6 +89,10 @@ class TestHostNormalisation:
         api = UniFiDisplayAPI("https://192.168.1.1", "u", "p", "dev-id")
         assert api._host == "https://192.168.1.1"
 
+    def test_preserves_http_scheme(self):
+        api = UniFiDisplayAPI("http://192.168.1.1", "u", "p", "dev-id")
+        assert api._host == "http://192.168.1.1"
+
     def test_strips_trailing_slash(self):
         api = UniFiDisplayAPI("192.168.1.1/", "u", "p", "dev-id")
         assert api._host == "https://192.168.1.1"
