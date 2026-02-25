@@ -93,6 +93,10 @@ class TestHostNormalisation:
         api = UniFiDisplayAPI("192.168.1.1/", "u", "p", "dev-id")
         assert api._host == "https://192.168.1.1"
 
+    def test_raises_value_error_for_invalid_host(self):
+        with pytest.raises(ValueError):
+            UniFiDisplayAPI("", "u", "p", "dev-id")
+
 
 # ---------------------------------------------------------------------------
 # authenticate
