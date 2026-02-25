@@ -10,7 +10,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import CannotConnectError, UniFiDisplayAPI
+from .api import CannotConnectError, AuthenticationError, UniFiDisplayAPI
 from .const import (
     CONF_DEVICE_ID,
     CONF_HOST,
@@ -51,6 +51,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             return await api.get_device_status()
         except CannotConnectError as exc:
             raise UpdateFailed(f"Error communicating with device: {exc}") from exc
+        except AuthenticationError:
+            _LOGGER.warning("Authentication expired during polling; re-authenticating")
+            try:
+                await api.authenticate()
+                return await api.get_device_status()
+            except (CannotConnectError, AuthenticationError) as exc:
+                raise UpdateFailed(f"Re-authentication failed: {exc}") from exc
 
     coordinator = DataUpdateCoordinator(
         hass,

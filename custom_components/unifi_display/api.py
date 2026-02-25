@@ -21,6 +21,7 @@ from urllib.parse import urlparse
 import aiohttp
 
 from .const import (
+    API_DEVICE_PATH,
     API_DEVICES_PATH,
     API_DEVICE_STATUS_PATH,
     API_LOGIN_PATH,
@@ -323,10 +324,49 @@ class UniFiDisplayAPI:
     # Device status
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _parse_device_status(data: Any) -> dict[str, Any]:
+        """Unwrap and normalise a single-device API response.
+
+        Handles two common response shapes:
+        * ``{"data": {...}, "err": null, ...}`` – wrapper object
+        * ``{...}``                             – bare device dict
+
+        Also maps camelCase / alternate key names that the UniFi API may
+        use to the snake_case keys expected by the sensor/number platforms.
+        """
+        if not isinstance(data, dict):
+            _LOGGER.debug("_parse_device_status: unexpected type %s", type(data).__name__)
+            return {}
+        # Unwrap wrapper format {"data": {...}}
+        if "data" in data and isinstance(data["data"], dict):
+            data = data["data"]
+        _LOGGER.debug("Device status raw keys: %s", list(data.keys()))
+        # Normalise common alternative key names to what SENSOR_TYPES expects.
+        normalized: dict[str, Any] = dict(data)
+        key_map = {
+            "displayState": "state",
+            "display_state": "state",
+            "ipAddress": "ip",
+            "ip_address": "ip",
+            "linkQuality": "link_quality",
+            "wifi_quality": "link_quality",
+            "wifiQuality": "link_quality",
+            "signalQuality": "link_quality",
+            "signal_quality": "link_quality",
+            "displayResolution": "resolution",
+            "screen_resolution": "resolution",
+            "screenResolution": "resolution",
+        }
+        for api_key, sensor_key in key_map.items():
+            if api_key in data and sensor_key not in normalized:
+                normalized[sensor_key] = data[api_key]
+        return normalized
+
     async def get_device_status(self) -> dict[str, Any]:
         """Fetch and return the current status of the configured device.
 
-        Re-authenticates once automatically on HTTP 401.
+        Re-authenticates once automatically on HTTP 401 or 403.
 
         Returns:
             A dictionary with device status fields (brightness, volume,
@@ -339,19 +379,22 @@ class UniFiDisplayAPI:
             await self.authenticate()
 
         session = await self._get_session()
-        url = f"{self._host}{API_DEVICE_STATUS_PATH.format(device_id=self._device_id)}"
+        url = f"{self._host}{API_DEVICE_PATH.format(device_id=self._device_id)}"
 
         try:
             async with session.get(url, headers=self._auth_headers()) as resp:
-                if resp.status == 401:
+                if resp.status in (401, 403):
+                    _LOGGER.debug(
+                        "get_device_status: HTTP %s, re-authenticating", resp.status
+                    )
                     await self.authenticate()
                     async with session.get(
                         url, headers=self._auth_headers()
                     ) as retry:
                         data = await retry.json(content_type=None)
-                        return data if isinstance(data, dict) else {}
+                        return self._parse_device_status(data)
                 data = await resp.json(content_type=None)
-                return data if isinstance(data, dict) else {}
+                return self._parse_device_status(data)
         except aiohttp.ClientError as exc:
             raise CannotConnectError(str(exc)) from exc
 
@@ -394,7 +437,12 @@ class UniFiDisplayAPI:
 
         try:
             async with session.patch(url, json=body, headers=headers) as resp:
-                if resp.status == 401:
+                if resp.status in (401, 403):
+                    _LOGGER.debug(
+                        "send_action '%s': HTTP %s, re-authenticating",
+                        action_name,
+                        resp.status,
+                    )
                     await self.authenticate()
                     headers["X-CSRF-Token"] = self._csrf_token or ""
                     if self._token:

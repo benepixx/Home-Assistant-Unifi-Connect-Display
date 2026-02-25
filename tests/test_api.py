@@ -353,6 +353,22 @@ class TestSendAction:
             result = await api.send_action("display_on")
         assert result is False
 
+    @pytest.mark.asyncio
+    async def test_reauths_on_403_and_retries(self, api):
+        """A 403 response triggers re-authentication and a second PATCH attempt."""
+        resp_403 = _mock_response(status=403)
+        resp_200 = _mock_response(status=200)
+
+        session = MagicMock()
+        session.closed = False
+        session.patch = MagicMock(side_effect=[resp_403, resp_200])
+
+        with patch.object(api, "_get_session", AsyncMock(return_value=session)):
+            with patch.object(api, "authenticate", AsyncMock()):
+                result = await api.send_action("display_on")
+
+        assert result is True
+
 
 # ---------------------------------------------------------------------------
 # get_devices
@@ -425,6 +441,123 @@ class TestParseDevicesResponse:
 
     def test_string_returns_empty(self):
         assert _parse_devices_response("unexpected") == []
+
+
+# ---------------------------------------------------------------------------
+# _parse_device_status
+# ---------------------------------------------------------------------------
+
+class TestParseDeviceStatus:
+    def test_bare_dict_returned_unchanged(self):
+        data = {"brightness": 80, "volume": 50, "state": "on"}
+        result = UniFiDisplayAPI._parse_device_status(data)
+        assert result["brightness"] == 80
+        assert result["volume"] == 50
+        assert result["state"] == "on"
+
+    def test_wrapper_dict_is_unwrapped(self):
+        inner = {"brightness": 80, "volume": 50}
+        data = {"data": inner, "err": None}
+        result = UniFiDisplayAPI._parse_device_status(data)
+        assert result["brightness"] == 80
+        assert result["volume"] == 50
+
+    def test_camel_case_display_state_mapped(self):
+        data = {"displayState": "on", "brightness": 80}
+        result = UniFiDisplayAPI._parse_device_status(data)
+        assert result["state"] == "on"
+
+    def test_camel_case_ip_address_mapped(self):
+        data = {"ipAddress": "192.168.1.50"}
+        result = UniFiDisplayAPI._parse_device_status(data)
+        assert result["ip"] == "192.168.1.50"
+
+    def test_camel_case_link_quality_mapped(self):
+        data = {"linkQuality": 95}
+        result = UniFiDisplayAPI._parse_device_status(data)
+        assert result["link_quality"] == 95
+
+    def test_existing_snake_case_key_not_overwritten(self):
+        """If both camelCase and snake_case keys exist, the existing snake_case wins."""
+        data = {"state": "off", "displayState": "on"}
+        result = UniFiDisplayAPI._parse_device_status(data)
+        assert result["state"] == "off"
+
+    def test_non_dict_returns_empty(self):
+        assert UniFiDisplayAPI._parse_device_status([]) == {}
+        assert UniFiDisplayAPI._parse_device_status(None) == {}
+        assert UniFiDisplayAPI._parse_device_status("string") == {}
+
+
+# ---------------------------------------------------------------------------
+# get_device_status
+# ---------------------------------------------------------------------------
+
+class TestGetDeviceStatus:
+    @pytest.fixture
+    def api(self):
+        api = UniFiDisplayAPI("192.168.1.100", "admin", "pass", "dev-id")
+        api._csrf_token = "existing-csrf"
+        return api
+
+    @pytest.mark.asyncio
+    async def test_returns_parsed_device_status(self, api):
+        device_data = {"brightness": 80, "volume": 50, "displayState": "on"}
+        resp = _mock_response(status=200, json_data=device_data)
+        session = MagicMock()
+        session.closed = False
+        session.get = MagicMock(return_value=resp)
+        with patch.object(api, "_get_session", AsyncMock(return_value=session)):
+            result = await api.get_device_status()
+        assert result["brightness"] == 80
+        assert result["state"] == "on"
+
+    @pytest.mark.asyncio
+    async def test_reauths_on_401(self, api):
+        resp_401 = _mock_response(status=401)
+        resp_200 = _mock_response(status=200, json_data={"brightness": 70})
+
+        session = MagicMock()
+        session.closed = False
+        session.get = MagicMock(side_effect=[resp_401, resp_200])
+
+        with patch.object(api, "_get_session", AsyncMock(return_value=session)):
+            with patch.object(api, "authenticate", AsyncMock()):
+                result = await api.get_device_status()
+
+        assert result["brightness"] == 70
+
+    @pytest.mark.asyncio
+    async def test_reauths_on_403(self, api):
+        resp_403 = _mock_response(status=403)
+        resp_200 = _mock_response(status=200, json_data={"brightness": 60})
+
+        session = MagicMock()
+        session.closed = False
+        session.get = MagicMock(side_effect=[resp_403, resp_200])
+
+        with patch.object(api, "_get_session", AsyncMock(return_value=session)):
+            with patch.object(api, "authenticate", AsyncMock()):
+                result = await api.get_device_status()
+
+        assert result["brightness"] == 60
+
+    @pytest.mark.asyncio
+    async def test_raises_cannot_connect_on_client_error(self, api):
+        import aiohttp
+
+        resp = MagicMock()
+        resp.__aenter__ = AsyncMock(side_effect=aiohttp.ClientError("err"))
+        resp.__aexit__ = AsyncMock(return_value=False)
+
+        session = MagicMock()
+        session.closed = False
+        session.get = MagicMock(return_value=resp)
+
+        with patch.object(api, "_get_session", AsyncMock(return_value=session)):
+            with pytest.raises(CannotConnectError):
+                await api.get_device_status()
+
 
 
 # ---------------------------------------------------------------------------
