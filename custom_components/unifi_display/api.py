@@ -25,7 +25,6 @@ from urllib.parse import urlparse
 import aiohttp
 
 from .const import (
-    API_DEVICE_PATH,
     API_DEVICES_PATH,
     API_DEVICE_STATUS_PATH,
     API_LOGIN_PATH,
@@ -401,7 +400,7 @@ class UniFiDisplayAPI:
 
         try:
             async with session.get(url, headers=self._auth_headers()) as resp:
-                if resp.status == 401:
+                if resp.status in (401, 403):
                     await self.authenticate()
                     async with session.get(
                         url, headers=self._auth_headers()
@@ -463,41 +462,25 @@ class UniFiDisplayAPI:
     async def get_device_status(self) -> dict[str, Any]:
         """Fetch and return the current status of the configured device.
 
-        Re-authenticates once automatically on HTTP 401 or 403.
+        Retrieves the full device list from the controller via the
+        collection endpoint (``GET /proxy/connect/api/v2/devices/``) and
+        returns the parsed status for the device matching ``_device_id``.
+        Re-authentication is handled automatically by :meth:`get_devices`.
 
         Returns:
             A dictionary with device status fields (brightness, volume,
             state, ip, hostname, resolution, link_quality, etc.).
+            Returns an empty dict if the device is not found in the list.
 
         Raises:
             CannotConnectError: The controller could not be reached.
         """
-        if self._csrf_token is None:
-            await self.authenticate()
-
-        session = await self._get_session()
-        url = f"{self._host}{API_DEVICE_PATH.format(device_id=self._device_id)}"
-
-        try:
-            async with session.get(url, headers=self._auth_headers()) as resp:
-                if resp.status in (401, 403):
-                    _LOGGER.debug(
-                        "get_device_status: HTTP %s, re-authenticating", resp.status
-                    )
-                    await self.authenticate()
-                    async with session.get(
-                        url, headers=self._auth_headers()
-                    ) as retry:
-                        data = await retry.json(content_type=None)
-                        result = self._parse_device_status(data)
-                        self._update_action_id_map_from_device(result)
-                        return result
-                data = await resp.json(content_type=None)
-                result = self._parse_device_status(data)
-                self._update_action_id_map_from_device(result)
-                return result
-        except aiohttp.ClientError as exc:
-            raise CannotConnectError(str(exc)) from exc
+        devices = await self.get_devices()
+        for device in devices:
+            if isinstance(device, dict) and device.get("id") == self._device_id:
+                return self._parse_device_status(device)
+        _LOGGER.debug("Device %s not found in devices list", self._device_id)
+        return {}
 
     # ------------------------------------------------------------------
     # Actions

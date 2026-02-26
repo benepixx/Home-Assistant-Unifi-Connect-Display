@@ -783,7 +783,7 @@ class TestGetDeviceStatus:
 
     @pytest.mark.asyncio
     async def test_returns_parsed_device_status(self, api):
-        device_data = {"brightness": 80, "volume": 50, "displayState": "on"}
+        device_data = [{"id": "dev-id", "brightness": 80, "volume": 50, "displayState": "on"}]
         resp = _mock_response(status=200, json_data=device_data)
         session = MagicMock()
         session.closed = False
@@ -794,9 +794,21 @@ class TestGetDeviceStatus:
         assert result["state"] == "on"
 
     @pytest.mark.asyncio
+    async def test_returns_empty_dict_when_device_id_not_found(self, api):
+        """Returns empty dict when device ID is not found in the devices list."""
+        device_data = [{"id": "other-dev", "brightness": 80}]
+        resp = _mock_response(status=200, json_data=device_data)
+        session = MagicMock()
+        session.closed = False
+        session.get = MagicMock(return_value=resp)
+        with patch.object(api, "_get_session", AsyncMock(return_value=session)):
+            result = await api.get_device_status()
+        assert result == {}
+
+    @pytest.mark.asyncio
     async def test_reauths_on_401(self, api):
         resp_401 = _mock_response(status=401)
-        resp_200 = _mock_response(status=200, json_data={"brightness": 70})
+        resp_200 = _mock_response(status=200, json_data=[{"id": "dev-id", "brightness": 70}])
 
         session = MagicMock()
         session.closed = False
@@ -811,7 +823,7 @@ class TestGetDeviceStatus:
     @pytest.mark.asyncio
     async def test_reauths_on_403(self, api):
         resp_403 = _mock_response(status=403)
-        resp_200 = _mock_response(status=200, json_data={"brightness": 60})
+        resp_200 = _mock_response(status=200, json_data=[{"id": "dev-id", "brightness": 60}])
 
         session = MagicMock()
         session.closed = False
@@ -949,13 +961,16 @@ class TestActionIdMap:
 
         async def _run():
             api._csrf_token = "csrf"
-            device_data = {
-                "brightness": 80,
-                "supportedActions": [
-                    {"id": "uuid-on", "name": "display_on"},
-                    {"id": "uuid-off", "name": "display_off"},
-                ],
-            }
+            device_data = [
+                {
+                    "id": "dev-id",
+                    "brightness": 80,
+                    "supportedActions": [
+                        {"id": "uuid-on", "name": "display_on"},
+                        {"id": "uuid-off", "name": "display_off"},
+                    ],
+                }
+            ]
             resp = _mock_response(status=200, json_data=device_data)
             session = MagicMock()
             session.closed = False
