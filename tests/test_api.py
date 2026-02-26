@@ -14,6 +14,7 @@ from custom_components.unifi_display.api import (
     UniFiDisplayAPI,
     _parse_devices_response,
 )
+from custom_components.unifi_display.switch import _DISPLAY_ON_STATES
 
 
 # ---------------------------------------------------------------------------
@@ -783,7 +784,7 @@ class TestGetDeviceStatus:
 
     @pytest.mark.asyncio
     async def test_returns_parsed_device_status(self, api):
-        device_data = {"brightness": 80, "volume": 50, "displayState": "on"}
+        device_data = [{"id": "dev-id", "brightness": 80, "volume": 50, "displayState": "on"}]
         resp = _mock_response(status=200, json_data=device_data)
         session = MagicMock()
         session.closed = False
@@ -794,9 +795,21 @@ class TestGetDeviceStatus:
         assert result["state"] == "on"
 
     @pytest.mark.asyncio
+    async def test_returns_empty_dict_when_device_id_not_found(self, api):
+        """Returns empty dict when device ID is not found in the devices list."""
+        device_data = [{"id": "other-dev", "brightness": 80}]
+        resp = _mock_response(status=200, json_data=device_data)
+        session = MagicMock()
+        session.closed = False
+        session.get = MagicMock(return_value=resp)
+        with patch.object(api, "_get_session", AsyncMock(return_value=session)):
+            result = await api.get_device_status()
+        assert result == {}
+
+    @pytest.mark.asyncio
     async def test_reauths_on_401(self, api):
         resp_401 = _mock_response(status=401)
-        resp_200 = _mock_response(status=200, json_data={"brightness": 70})
+        resp_200 = _mock_response(status=200, json_data=[{"id": "dev-id", "brightness": 70}])
 
         session = MagicMock()
         session.closed = False
@@ -811,7 +824,7 @@ class TestGetDeviceStatus:
     @pytest.mark.asyncio
     async def test_reauths_on_403(self, api):
         resp_403 = _mock_response(status=403)
-        resp_200 = _mock_response(status=200, json_data={"brightness": 60})
+        resp_200 = _mock_response(status=200, json_data=[{"id": "dev-id", "brightness": 60}])
 
         session = MagicMock()
         session.closed = False
@@ -949,13 +962,16 @@ class TestActionIdMap:
 
         async def _run():
             api._csrf_token = "csrf"
-            device_data = {
-                "brightness": 80,
-                "supportedActions": [
-                    {"id": "uuid-on", "name": "display_on"},
-                    {"id": "uuid-off", "name": "display_off"},
-                ],
-            }
+            device_data = [
+                {
+                    "id": "dev-id",
+                    "brightness": 80,
+                    "supportedActions": [
+                        {"id": "uuid-on", "name": "display_on"},
+                        {"id": "uuid-off", "name": "display_off"},
+                    ],
+                }
+            ]
             resp = _mock_response(status=200, json_data=device_data)
             session = MagicMock()
             session.closed = False
@@ -966,6 +982,148 @@ class TestActionIdMap:
         asyncio.get_event_loop().run_until_complete(_run())
         assert api._action_id_map["display_on"] == "uuid-on"
         assert api._action_id_map["display_off"] == "uuid-off"
+
+# ---------------------------------------------------------------------------
+# End-to-end: get_device_status returns all SENSOR_TYPES fields
+# ---------------------------------------------------------------------------
+
+class TestGetDeviceStatusAllSensors:
+    """Confirm that get_device_status() surfaces values for every SENSOR_TYPES key.
+
+    This class exercises the full pipeline:
+        collection endpoint response
+        → _parse_devices_response (list unwrap)
+        → get_device_status (device ID match)
+        → _parse_device_status (camelCase → snake_case mapping)
+        → coordinator.data.get(sensor_key)   (what each sensor entity reads)
+
+    Two device layouts are tested: one where each API field is already in
+    snake_case and one where field names are camelCase (as the real UniFi
+    Connect API returns them).
+    """
+
+    @pytest.fixture
+    def api(self):
+        api = UniFiDisplayAPI("192.168.1.100", "admin", "pass", "dev-id")
+        api._csrf_token = "existing-csrf"
+        return api
+
+    @pytest.mark.asyncio
+    async def test_all_sensor_types_resolved_from_camel_case_collection_response(self, api):
+        """All 7 SENSOR_TYPES keys resolve when the API uses camelCase field names."""
+        # This is the typical UniFi Connect API shape returned by the
+        # collection endpoint GET /proxy/connect/api/v2/devices/.
+        device = {
+            "id": "dev-id",
+            "name": "Living Room Display",
+            "brightness": 80,
+            "volume": 50,
+            "displayState": "on",        # → state
+            "ipAddress": "192.168.1.50", # → ip
+            "hostname": "display-1",
+            "screenResolution": "1920x1080",  # → resolution
+            "linkQuality": 95,           # → link_quality
+        }
+        resp = _mock_response(status=200, json_data=[device])
+        session = MagicMock()
+        session.closed = False
+        session.get = MagicMock(return_value=resp)
+
+        with patch.object(api, "_get_session", AsyncMock(return_value=session)):
+            result = await api.get_device_status()
+
+        assert result["brightness"] == 80
+        assert result["volume"] == 50
+        assert result["state"] == "on"
+        assert result["ip"] == "192.168.1.50"
+        assert result["hostname"] == "display-1"
+        assert result["resolution"] == "1920x1080"
+        assert result["link_quality"] == 95
+
+    @pytest.mark.asyncio
+    async def test_all_sensor_types_resolved_from_snake_case_collection_response(self, api):
+        """All 7 SENSOR_TYPES keys resolve when the API already uses snake_case field names."""
+        device = {
+            "id": "dev-id",
+            "brightness": 80,
+            "volume": 50,
+            "state": "on",
+            "ip": "192.168.1.50",
+            "hostname": "display-1",
+            "resolution": "1920x1080",
+            "link_quality": 95,
+        }
+        resp = _mock_response(status=200, json_data=[device])
+        session = MagicMock()
+        session.closed = False
+        session.get = MagicMock(return_value=resp)
+
+        with patch.object(api, "_get_session", AsyncMock(return_value=session)):
+            result = await api.get_device_status()
+
+        assert result["brightness"] == 80
+        assert result["volume"] == 50
+        assert result["state"] == "on"
+        assert result["ip"] == "192.168.1.50"
+        assert result["hostname"] == "display-1"
+        assert result["resolution"] == "1920x1080"
+        assert result["link_quality"] == 95
+
+    @pytest.mark.asyncio
+    async def test_all_sensor_types_resolved_from_wrapper_collection_response(self, api):
+        """All 7 SENSOR_TYPES keys resolve when the collection endpoint wraps the list."""
+        device = {
+            "id": "dev-id",
+            "brightness": 70,
+            "volume": 40,
+            "displayState": "sleep",     # → state
+            "ipAddress": "10.0.0.5",     # → ip
+            "hostname": "display-2",
+            "displayResolution": "3840x2160",  # → resolution
+            "wifiQuality": 88,           # → link_quality
+        }
+        wrapper = {"err": None, "type": "collection", "data": [device]}
+        resp = _mock_response(status=200, json_data=wrapper)
+        session = MagicMock()
+        session.closed = False
+        session.get = MagicMock(return_value=resp)
+
+        with patch.object(api, "_get_session", AsyncMock(return_value=session)):
+            result = await api.get_device_status()
+
+        assert result["brightness"] == 70
+        assert result["volume"] == 40
+        assert result["state"] == "sleep"
+        assert result["ip"] == "10.0.0.5"
+        assert result["hostname"] == "display-2"
+        assert result["resolution"] == "3840x2160"
+        assert result["link_quality"] == 88
+
+    @pytest.mark.asyncio
+    async def test_power_switch_state_resolves_when_api_returns_connected(self, api):
+        """state='connected' (connection state) also satisfies the power switch check."""
+        device = {
+            "id": "dev-id",
+            "brightness": 80,
+            "volume": 50,
+            "state": "connected",   # connection state; no displayState present
+            "ipAddress": "192.168.1.50",
+            "hostname": "display-1",
+            "resolution": "1920x1080",
+            "linkQuality": 90,
+        }
+        resp = _mock_response(status=200, json_data=[device])
+        session = MagicMock()
+        session.closed = False
+        session.get = MagicMock(return_value=resp)
+
+        with patch.object(api, "_get_session", AsyncMock(return_value=session)):
+            result = await api.get_device_status()
+
+        # The power switch treats "connected" as on (_DISPLAY_ON_STATES).
+        assert result["state"] == "connected"
+        assert result["state"].lower() in _DISPLAY_ON_STATES
+
 
 class TestClose:
     @pytest.mark.asyncio
