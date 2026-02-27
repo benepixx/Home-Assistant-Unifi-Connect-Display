@@ -5,9 +5,12 @@ from __future__ import annotations
 import logging
 from datetime import timedelta
 
+import voluptuous as vol
+
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import CannotConnectError, AuthenticationError, UniFiDisplayAPI
@@ -19,11 +22,18 @@ from .const import (
     CONF_VERIFY_SSL,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
+    SERVICE_LAUNCH_APP,
+    SERVICE_LOAD_WEBSITE,
+    SERVICE_LOAD_YOUTUBE,
 )
 
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = ["sensor", "number", "switch", "select", "button"]
+
+SERVICE_LOAD_WEBSITE_SCHEMA = vol.Schema({vol.Required("url"): cv.string})
+SERVICE_LAUNCH_APP_SCHEMA = vol.Schema({vol.Required("app_id"): cv.string})
+SERVICE_LOAD_YOUTUBE_SCHEMA = vol.Schema({vol.Required("video_id"): cv.string})
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -77,6 +87,34 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    if not hass.services.has_service(DOMAIN, SERVICE_LOAD_WEBSITE):
+
+        async def _handle_load_website(call: ServiceCall) -> None:
+            url = call.data["url"]
+            for entry_data in hass.data[DOMAIN].values():
+                await entry_data["api"].send_action("load_website", {"url": url})
+
+        async def _handle_launch_app(call: ServiceCall) -> None:
+            app_id = call.data["app_id"]
+            for entry_data in hass.data[DOMAIN].values():
+                await entry_data["api"].send_action("launch_app", {"app_id": app_id})
+
+        async def _handle_load_youtube(call: ServiceCall) -> None:
+            video_id = call.data["video_id"]
+            for entry_data in hass.data[DOMAIN].values():
+                await entry_data["api"].send_action("load_youtube", {"video_id": video_id})
+
+        hass.services.async_register(
+            DOMAIN, SERVICE_LOAD_WEBSITE, _handle_load_website, schema=SERVICE_LOAD_WEBSITE_SCHEMA
+        )
+        hass.services.async_register(
+            DOMAIN, SERVICE_LAUNCH_APP, _handle_launch_app, schema=SERVICE_LAUNCH_APP_SCHEMA
+        )
+        hass.services.async_register(
+            DOMAIN, SERVICE_LOAD_YOUTUBE, _handle_load_youtube, schema=SERVICE_LOAD_YOUTUBE_SCHEMA
+        )
+
     return True
 
 
@@ -88,5 +126,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         api: UniFiDisplayAPI | None = entry_data.get("api")
         if api:
             await api.close()
+        if not hass.data[DOMAIN]:
+            hass.services.async_remove(DOMAIN, SERVICE_LOAD_WEBSITE)
+            hass.services.async_remove(DOMAIN, SERVICE_LAUNCH_APP)
+            hass.services.async_remove(DOMAIN, SERVICE_LOAD_YOUTUBE)
     return unload_ok
 
