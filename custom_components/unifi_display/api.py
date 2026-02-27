@@ -205,7 +205,7 @@ class UniFiDisplayAPI:
             type_info = device.get("type")
             if isinstance(type_info, dict):
                 category = type_info.get("category")
-                if isinstance(category, dict):
+                if isinstance(category, dict) and "supportedActions" in category:
                     supported = category.get("supportedActions", [])
                 else:
                     supported = type_info.get("supportedActions", [])
@@ -218,7 +218,7 @@ class UniFiDisplayAPI:
             type_fk = device.get("typeFK")
             if isinstance(type_fk, dict):
                 category = type_fk.get("category")
-                if isinstance(category, dict):
+                if isinstance(category, dict) and "supportedActions" in category:
                     supported = category.get("supportedActions", [])
                 else:
                     supported = type_fk.get("supportedActions", [])
