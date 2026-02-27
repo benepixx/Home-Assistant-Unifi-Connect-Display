@@ -938,6 +938,53 @@ class TestActionIdMap:
         api._update_action_id_map_from_device(device)
         assert api._action_id_map["display_on"] == "top-uuid"
 
+    def test_update_from_device_nested_under_typefk(self, api):
+        """supportedActions nested under device['typeFK'] is supported."""
+        device = {
+            "id": "dev-id",
+            "typeFK": {
+                "supportedActions": [
+                    {"id": "uuid-fk-on", "name": "display_on"},
+                    {"id": "uuid-fk-off", "name": "display_off"},
+                ],
+            },
+        }
+        api._update_action_id_map_from_device(device)
+        assert api._action_id_map["display_on"] == "uuid-fk-on"
+        assert api._action_id_map["display_off"] == "uuid-fk-off"
+
+    def test_update_from_device_nested_under_typefk_category(self, api):
+        """supportedActions nested under device['typeFK']['category'] is supported."""
+        device = {
+            "id": "dev-id",
+            "typeFK": {
+                "category": {
+                    "supportedActions": [
+                        {"id": "uuid-fkcat-on", "name": "display_on"},
+                        {"id": "uuid-fkcat-off", "name": "display_off"},
+                    ],
+                },
+            },
+        }
+        api._update_action_id_map_from_device(device)
+        assert api._action_id_map["display_on"] == "uuid-fkcat-on"
+        assert api._action_id_map["display_off"] == "uuid-fkcat-off"
+
+    def test_update_from_device_nested_under_feature_flags(self, api):
+        """supportedActions nested under device['featureFlags'] is supported."""
+        device = {
+            "id": "dev-id",
+            "featureFlags": {
+                "supportedActions": [
+                    {"id": "uuid-ff-on", "name": "display_on"},
+                    {"id": "uuid-ff-off", "name": "display_off"},
+                ],
+            },
+        }
+        api._update_action_id_map_from_device(device)
+        assert api._action_id_map["display_on"] == "uuid-ff-on"
+        assert api._action_id_map["display_off"] == "uuid-ff-off"
+
     def test_update_action_id_map_nested_type_supported_actions(self, api):
         """_update_action_id_map finds matching device with nested type.supportedActions."""
         devices = [

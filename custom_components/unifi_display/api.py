@@ -211,6 +211,22 @@ class UniFiDisplayAPI:
                     supported = type_info.get("supportedActions", [])
             else:
                 supported = []
+        if not isinstance(supported, list) or not supported:
+            # Check device["typeFK"]["supportedActions"] and
+            # device["typeFK"]["category"]["supportedActions"] as additional
+            # fallback locations used on some firmware versions.
+            type_fk = device.get("typeFK")
+            if isinstance(type_fk, dict):
+                category = type_fk.get("category")
+                if isinstance(category, dict):
+                    supported = category.get("supportedActions", [])
+                else:
+                    supported = type_fk.get("supportedActions", [])
+        if not isinstance(supported, list) or not supported:
+            # Last resort: check device["featureFlags"]["supportedActions"].
+            feature_flags = device.get("featureFlags")
+            if isinstance(feature_flags, dict):
+                supported = feature_flags.get("supportedActions", [])
         if not isinstance(supported, list):
             return
         new_entries: dict[str, str] = {}
@@ -227,6 +243,14 @@ class UniFiDisplayAPI:
                 "Updated action ID map with %d entry/entries for device %s",
                 len(self._action_id_map),
                 self._device_id,
+            )
+        else:
+            _LOGGER.debug(
+                "No supportedActions found for device %s. "
+                "Device 'type' field: %s, 'typeFK' field: %s",
+                self._device_id,
+                device.get("type"),
+                device.get("typeFK"),
             )
 
     def _update_action_id_map(self, devices: list[dict[str, Any]]) -> None:
