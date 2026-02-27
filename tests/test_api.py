@@ -926,6 +926,22 @@ class TestActionIdMap:
         assert api._action_id_map["display_on"] == "uuid-cat-on"
         assert api._action_id_map["display_off"] == "uuid-cat-off"
 
+    def test_update_from_device_type_with_category_but_actions_on_type(self, api):
+        """supportedActions on type level when category exists but has no actions."""
+        device = {
+            "id": "dev-id",
+            "type": {
+                "category": {"id": "dbea3aad-...", "name": "UC-Display", "parent": None},
+                "supportedActions": [
+                    {"id": "uuid-on", "name": "display_on"},
+                    {"id": "uuid-off", "name": "display_off"},
+                ],
+            },
+        }
+        api._update_action_id_map_from_device(device)
+        assert api._action_id_map["display_on"] == "uuid-on"
+        assert api._action_id_map["display_off"] == "uuid-off"
+
     def test_update_from_device_top_level_takes_priority_over_type(self, api):
         """Top-level supportedActions takes priority over device['type']['supportedActions']."""
         device = {
