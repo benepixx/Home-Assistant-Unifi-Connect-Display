@@ -19,8 +19,13 @@ from .const import CONF_DEVICE_ID, DOMAIN, MANUFACTURER, NAME, SWITCH_ACTION_PAI
 
 _LOGGER = logging.getLogger(__name__)
 
-# State values reported by the UniFi API that indicate the display is on.
-_DISPLAY_ON_STATES = frozenset({"on", "connected", "active", "running"})
+# Maps on_action name → coordinator data key that reflects the current state.
+STATE_KEY_MAP: dict[str, str] = {
+    "enable_sleep": "sleep_mode",
+    "enable_auto_reload": "auto_reload",
+    "enable_auto_rotate": "auto_rotate",
+    "enable_memorize_playlist": "memorize_playlist",
+}
 
 
 async def async_setup_entry(
@@ -37,7 +42,7 @@ async def async_setup_entry(
         UniFiDisplayPowerSwitch(api, coordinator, entry, device_id),
     ]
     entities.extend(
-        UniFiDisplaySwitch(api, entry, device_id, on_action, off_action, friendly_name)
+        UniFiDisplaySwitch(api, coordinator, entry, device_id, on_action, off_action, friendly_name)
         for on_action, off_action, friendly_name in SWITCH_ACTION_PAIRS
     )
     async_add_entities(entities)
@@ -69,10 +74,10 @@ class UniFiDisplayPowerSwitch(CoordinatorEntity, SwitchEntity):
         """Return the current display power state from coordinator data."""
         if self.coordinator.data is None:
             return None
-        state = self.coordinator.data.get("state")
-        if state is None:
+        display_on = self.coordinator.data.get("display_on")
+        if display_on is None:
             return None
-        return str(state).lower() in _DISPLAY_ON_STATES
+        return bool(display_on)
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Send the display_on action."""
@@ -91,12 +96,13 @@ class UniFiDisplayPowerSwitch(CoordinatorEntity, SwitchEntity):
             _LOGGER.error("Failed to send action 'display_off' to display")
 
 
-class UniFiDisplaySwitch(SwitchEntity):
+class UniFiDisplaySwitch(CoordinatorEntity, SwitchEntity):
     """A switch that sends enable/disable action pairs to the display."""
 
     def __init__(
         self,
         api: UniFiDisplayAPI,
+        coordinator: DataUpdateCoordinator,
         entry: ConfigEntry,
         device_id: str,
         on_action: str,
@@ -104,12 +110,13 @@ class UniFiDisplaySwitch(SwitchEntity):
         friendly_name: str,
     ) -> None:
         """Initialise the switch."""
+        super().__init__(coordinator)
         self._api = api
         self._on_action = on_action
         self._off_action = off_action
+        self._state_key = STATE_KEY_MAP.get(on_action)
         self._attr_name = f"{NAME} {friendly_name}"
         self._attr_unique_id = f"{device_id}_{on_action}"
-        self._attr_is_on: bool = False
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, device_id)},
             name=entry.title,
@@ -117,9 +124,18 @@ class UniFiDisplaySwitch(SwitchEntity):
         )
 
     @property
-    def is_on(self) -> bool:
-        """Return the current state of the switch."""
-        return self._attr_is_on
+    def is_on(self) -> bool | None:
+        """Return the current state from coordinator data.
+
+        Returns None (unknown) if no coordinator data or if this switch
+        action has no corresponding state key in STATE_KEY_MAP.
+        """
+        if self._state_key is None or self.coordinator.data is None:
+            return None
+        value = self.coordinator.data.get(self._state_key)
+        if value is None:
+            return None
+        return bool(value)
 
     @property
     def available(self) -> bool:
@@ -133,8 +149,7 @@ class UniFiDisplaySwitch(SwitchEntity):
         """Send the 'enable' action to the display."""
         success = await self._api.send_action(self._on_action)
         if success:
-            self._attr_is_on = True
-            self.async_write_ha_state()
+            await self.coordinator.async_request_refresh()
         else:
             _LOGGER.error(
                 "Failed to send action '%s' to display", self._on_action
@@ -144,9 +159,9 @@ class UniFiDisplaySwitch(SwitchEntity):
         """Send the 'disable' action to the display."""
         success = await self._api.send_action(self._off_action)
         if success:
-            self._attr_is_on = False
-            self.async_write_ha_state()
+            await self.coordinator.async_request_refresh()
         else:
             _LOGGER.error(
                 "Failed to send action '%s' to display", self._off_action
             )
+

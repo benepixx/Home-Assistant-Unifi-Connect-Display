@@ -41,6 +41,9 @@ SUPPORTED_ACTIONS = [
     "launch_app",
     "stop_app",
     "load_youtube",
+    "switch",
+    "rotate",
+    "signage_screen_fit",
 ]
 
 # Apps available on the display
@@ -56,8 +59,8 @@ AVAILABLE_APPS = [
 # The sensor entities provide *read-back* of the current device values while the
 # number entities provide the slider control interface for setting new values.
 SENSOR_TYPES = {
-    "brightness": ("Brightness", "%"),
-    "volume": ("Volume", "%"),
+    "brightness": ("Brightness", None),
+    "volume": ("Volume", None),
     "state": ("Display State", None),
     "ip": ("IP Address", None),
     "hostname": ("Hostname", None),

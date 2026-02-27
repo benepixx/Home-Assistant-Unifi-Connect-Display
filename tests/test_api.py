@@ -14,7 +14,7 @@ from custom_components.unifi_display.api import (
     UniFiDisplayAPI,
     _parse_devices_response,
 )
-from custom_components.unifi_display.switch import _DISPLAY_ON_STATES
+from custom_components.unifi_display.switch import STATE_KEY_MAP
 
 
 # ---------------------------------------------------------------------------
@@ -909,6 +909,23 @@ class TestActionIdMap:
         assert api._action_id_map["display_on"] == "06ad25d0-b087-46de-8e9b-7b18339e7238"
         assert api._action_id_map["display_off"] == "ea959362-c56f-4932-ab8b-0f512a93460c"
 
+    def test_update_from_device_nested_under_type_category(self, api):
+        """supportedActions nested under device['type']['category'] is supported."""
+        device = {
+            "id": "dev-id",
+            "type": {
+                "category": {
+                    "supportedActions": [
+                        {"id": "uuid-cat-on", "name": "display_on"},
+                        {"id": "uuid-cat-off", "name": "display_off"},
+                    ],
+                },
+            },
+        }
+        api._update_action_id_map_from_device(device)
+        assert api._action_id_map["display_on"] == "uuid-cat-on"
+        assert api._action_id_map["display_off"] == "uuid-cat-off"
+
     def test_update_from_device_top_level_takes_priority_over_type(self, api):
         """Top-level supportedActions takes priority over device['type']['supportedActions']."""
         device = {
@@ -1100,17 +1117,22 @@ class TestGetDeviceStatusAllSensors:
         assert result["link_quality"] == 88
 
     @pytest.mark.asyncio
-    async def test_power_switch_state_resolves_when_api_returns_connected(self, api):
-        """state='connected' (connection state) also satisfies the power switch check."""
+    async def test_power_switch_state_resolves_from_shadow_display(self, api):
+        """display_on is extracted from shadow.display for the power switch."""
         device = {
             "id": "dev-id",
-            "brightness": 80,
-            "volume": 50,
-            "state": "connected",   # connection state; no displayState present
+            "state": "ADOPTED",
             "ipAddress": "192.168.1.50",
             "hostname": "display-1",
-            "resolution": "1920x1080",
-            "linkQuality": 90,
+            "shadow": {
+                "display": True,
+                "brightness": 200,
+                "volume": 20,
+                "sleepMode": False,
+                "autoReload": False,
+                "autoRotate": True,
+                "memorizePlaylist": False,
+            },
         }
         resp = _mock_response(status=200, json_data=[device])
         session = MagicMock()
@@ -1120,9 +1142,19 @@ class TestGetDeviceStatusAllSensors:
         with patch.object(api, "_get_session", AsyncMock(return_value=session)):
             result = await api.get_device_status()
 
-        # The power switch treats "connected" as on (_DISPLAY_ON_STATES).
-        assert result["state"] == "connected"
-        assert result["state"].lower() in _DISPLAY_ON_STATES
+        # Power switch now reads display_on from shadow.display.
+        assert result["display_on"] is True
+        assert result["state"] == "ADOPTED"
+        # Shadow fields are also flattened.
+        assert result["brightness"] == 200
+        assert result["volume"] == 20
+        assert result["sleep_mode"] is False
+        assert result["auto_reload"] is False
+        assert result["auto_rotate"] is True
+        assert result["memorize_playlist"] is False
+        # STATE_KEY_MAP maps enable_sleep -> sleep_mode, etc.
+        assert STATE_KEY_MAP["enable_sleep"] == "sleep_mode"
+        assert STATE_KEY_MAP["enable_auto_reload"] == "auto_reload"
 
 
 class TestClose:
