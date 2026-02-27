@@ -199,13 +199,18 @@ class UniFiDisplayAPI:
         """
         supported = device.get("supportedActions")
         if not isinstance(supported, list):
-            # Also check device["type"]["supportedActions"] (firmware >= 1.13.6).
+            # Also check device["type"]["category"]["supportedActions"]
+            # (firmware >= 1.13.6 nests actions under type.category).
+            # Fall back to device["type"]["supportedActions"] for older firmware.
             type_info = device.get("type")
-            supported = (
-                type_info.get("supportedActions", [])
-                if isinstance(type_info, dict)
-                else []
-            )
+            if isinstance(type_info, dict):
+                category = type_info.get("category")
+                if isinstance(category, dict):
+                    supported = category.get("supportedActions", [])
+                else:
+                    supported = type_info.get("supportedActions", [])
+            else:
+                supported = []
         if not isinstance(supported, list):
             return
         new_entries: dict[str, str] = {}
@@ -428,8 +433,9 @@ class UniFiDisplayAPI:
         * ``{"data": {...}, "err": null, ...}`` – wrapper object
         * ``{...}``                             – bare device dict
 
-        Also maps camelCase / alternate key names that the UniFi API may
-        use to the snake_case keys expected by the sensor/number platforms.
+        Also flattens ``shadow`` and ``extraInfo`` sub-objects and maps
+        camelCase / alternate key names to the snake_case keys expected by
+        the sensor/number/switch platforms.
         """
         if not isinstance(data, dict):
             _LOGGER.debug("_parse_device_status: unexpected type %s", type(data).__name__)
@@ -457,6 +463,34 @@ class UniFiDisplayAPI:
         for api_key, sensor_key in key_map.items():
             if api_key in data and sensor_key not in normalized:
                 normalized[sensor_key] = data[api_key]
+
+        # Flatten shadow fields (brightness, volume, sleepMode, autoReload, etc.)
+        shadow = data.get("shadow")
+        if isinstance(shadow, dict):
+            normalized["brightness"] = shadow.get("brightness")
+            normalized["volume"] = shadow.get("volume")
+            normalized["sleep_mode"] = shadow.get("sleepMode")
+            normalized["auto_reload"] = shadow.get("autoReload")
+            normalized["auto_rotate"] = shadow.get("autoRotate")
+            normalized["memorize_playlist"] = shadow.get("memorizePlaylist")
+            normalized["display_on"] = shadow.get("display", False)
+            normalized["mode"] = shadow.get("mode")
+            # Determine current app from appList (entry with selected=True).
+            app_list = shadow.get("appList")
+            if isinstance(app_list, list):
+                for app in app_list:
+                    if isinstance(app, dict) and app.get("selected"):
+                        normalized["current_app"] = app.get("apkId") or app.get("id")
+                        break
+
+        # Flatten extraInfo fields (resolution, linkQuality, etc.)
+        extra_info = data.get("extraInfo")
+        if isinstance(extra_info, dict):
+            if "resolution" not in normalized or normalized.get("resolution") is None:
+                normalized["resolution"] = extra_info.get("resolution")
+            if "link_quality" not in normalized or normalized.get("link_quality") is None:
+                normalized["link_quality"] = extra_info.get("linkQuality")
+
         return normalized
 
     async def get_device_status(self) -> dict[str, Any]:
@@ -514,6 +548,12 @@ class UniFiDisplayAPI:
 
         session = await self._get_session()
         url = f"{self._host}{API_DEVICE_STATUS_PATH.format(device_id=self._device_id)}"
+        # Auto-prepend http:// to load_website URL if no scheme is present.
+        if action_name == "load_website" and args and "url" in args:
+            raw_url = str(args["url"])
+            if not raw_url.startswith(("http://", "https://")):
+                args = dict(args)
+                args["url"] = f"http://{raw_url}"
         # Use the supported action UUID if available; fall back to a random
         # UUID for backward compatibility with controllers that may not enforce
         # the action ID check.
